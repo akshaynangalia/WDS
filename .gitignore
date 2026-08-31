@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.xlsx
+!tests/fixtures/*.xlsx
+!tests/fixtures/**/*.xlsx
+run_history.db
+.pytest_cache/
+*.egg-info/
+.DS_Store
