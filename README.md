@@ -63,6 +63,20 @@ Full directory tree and per-file responsibilities are documented in the Developm
 - `output/` — Excel workbook generation
 - `tests/` — unit, integration, and UI tests
 
+## Bug-Fix Workflow (UAT)
+
+The project is in UAT, so fixes are kept **surgical** — only the files a fix strictly needs are touched, with no refactors, opportunistic cleanups, or new dependencies. One focused branch and commit per bug, landed via a pull request on the working GitHub repo.
+
+Each fix goes through five steps, with a checkpoint for review before any code is changed:
+
+1. **Plain-language explanation** of what is broken and why it matters.
+2. **Impact and scope** — severity, rough size (files / lines), the proposed fix, and the exact files and functions it touches.
+3. **Implementation plan** — the precise changes, and nothing beyond them.
+4. **Plan review** — confirm it addresses exactly that bug and no more.
+5. **Execute** — branch (`fix/<short-name>`), fix, run `pytest`, commit, push, open a PR, merge.
+
+The full text of this workflow is also in `CLAUDE.md`.
+
 ## Deployment
 
 Not yet reached. Per project sequencing (Development Planning Document, Rule 7): local development and thorough testing happens first (Phase 9), GitHub publish comes next (Phase 10), and Posit Connect deployment comes last (Phase 11). This section will be filled in with real deployment instructions once those phases are complete.
