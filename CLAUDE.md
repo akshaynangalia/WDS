@@ -32,6 +32,18 @@ This is a Python + Dash tool for Mondelez that converts a Monthly Production Pla
 - **Local host first, always.** Do not touch GitHub or Posit Connect until Phase 9 (local testing) is genuinely complete. No exceptions for convenience or "just to check."
 - If something doesn't fit the plan — an ambiguous rule, a missing case — raise it and log it (Dev Plan Section 8, Risk Register). Don't quietly improvise a fix.
 
+## Bug-Fix Workflow (UAT phase — mandatory)
+
+The project is in UAT. Fixes must be **surgical**: touch only the files the fix strictly requires — no refactors, no "while I'm here" cleanups, no new dependencies, no reformatting unrelated lines. One focused branch and commit per bug.
+
+Every bug fix follows these five steps in order, **pausing for the user's go-ahead between step 4 and step 5**:
+
+1. **Explain the bug in plain language.** No jargon. What is broken, and why it matters.
+2. **State impact and scope.** Severity (critical / high / moderate / minor); size (how many files, roughly how many lines); the proposed fix in one or two sentences; the exact files and functions it touches.
+3. **Write the implementation plan.** The precise files/functions to change — and nothing else.
+4. **Review the plan against the bug.** Confirm it fixes exactly that issue and no more; cut anything not strictly required.
+5. **Execute.** Create a `fix/<short-name>` branch off `main`, apply the fix, run `pytest`, commit, push, and hand over a PR description. The user creates and merges the PR on GitHub.
+
 ## File Map
 
 Full directory tree, per-file responsibility, and the exact call sequence a run takes through the codebase are in the **Development Planning Document, Section 2**. Do not create files outside that structure without updating that document first.
@@ -69,7 +81,7 @@ Run 2 distributes whatever FIN remains against remaining weekly capacity, never 
 ## What NOT To Do
 
 - Don't deploy anything to Posit Connect before Phase 11.
-- Don't push to the GitHub remote before Phase 10 (local commits are fine and encouraged throughout).
+- Don't push to the *company* GitHub / Posit pipeline before Phase 10. (The personal repo `github.com/akshaynangalia/WDS`, used for review and PR-based bug fixing during UAT, is a separate track and is fine to push to — client-confirmed 2026-09-01.)
 - Don't guess at REQ-CR-05 (split-week changeover) logic — `engine/changeover.py` stays a documented no-op until the client provides the resolved rule. See Dev Plan Risk Register item 1.
 - Don't add SKU-level Priority/MOQ handling — RCCP stays Link-Code level per client decision (Risk Register item 2).
 - Don't reproduce the "ID not found in layout" Dash pattern seen in the reference prototype screenshots — `tests/test_ui_layout_ids.py` exists specifically to catch this (Risk Register item 5).
