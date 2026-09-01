@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import os
 
+import pandas as pd
+
 from engine.parsers import manual_input_parser, mps_input_parser, mps_output_parser
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "sample_files")
@@ -50,3 +52,24 @@ def test_manual_input_parse_none_is_valid():
     assert data.rccp is None
     assert data.calendar is None
     assert data.sheets_found == set()
+
+
+def test_parsers_release_the_workbook_file_handle(tmp_path):
+    """Regression: parse() must close the workbook so the file can be deleted
+    afterwards. A lingering pd.ExcelFile handle locks the file on Windows --
+    the cause of the TemporaryDirectory cleanup failures in test_run_manager.
+    On this platform os.unlink raises PermissionError if the handle is still
+    open; elsewhere the call still exercises the close path.
+    """
+    # Enough rows that manual_input_parser's header=2 offset has a header to land on.
+    frame = pd.DataFrame({"a": list(range(5)), "b": list(range(5))})
+    for i, (parse_fn, sheet) in enumerate((
+        (mps_input_parser.parse, "SKU Master"),
+        (mps_output_parser.parse, "Linkcode_DIFC"),
+        (manual_input_parser.parse, "RCCP"),
+    )):
+        path = tmp_path / f"book_{i}.xlsx"
+        frame.to_excel(path, sheet_name=sheet, index=False)
+        parse_fn(str(path))
+        path.unlink()  # must not raise
+        assert not path.exists()

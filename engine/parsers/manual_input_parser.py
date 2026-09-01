@@ -32,20 +32,22 @@ def parse(file) -> ManualInputData:
     if file is None:
         return ManualInputData(rccp=None, calendar=None, sheets_found=set())
 
-    xl = pd.ExcelFile(file)
-    sheets_found = set(xl.sheet_names)
+    # Opened in a `with` block so the workbook handle is released before this
+    # function returns -- see the note in mps_input_parser.parse for why.
+    with pd.ExcelFile(file) as xl:
+        sheets_found = set(xl.sheet_names)
 
-    rccp = None
-    if "RCCP" in sheets_found:
-        rccp = xl.parse("RCCP", header=RCCP_HEADER_ROW)
-        rccp = rccp.dropna(how="all")
+        rccp = None
+        if "RCCP" in sheets_found:
+            rccp = xl.parse("RCCP", header=RCCP_HEADER_ROW)
+            rccp = rccp.dropna(how="all")
 
-    calendar = None
-    if "Calendar" in sheets_found:
-        calendar = xl.parse("Calendar", header=CALENDAR_HEADER_ROW)
-        calendar = calendar.dropna(how="all")
+        calendar = None
+        if "Calendar" in sheets_found:
+            calendar = xl.parse("Calendar", header=CALENDAR_HEADER_ROW)
+            calendar = calendar.dropna(how="all")
 
-    return ManualInputData(rccp=rccp, calendar=calendar, sheets_found=sheets_found)
+        return ManualInputData(rccp=rccp, calendar=calendar, sheets_found=sheets_found)
 
 
 def has_column(df: pd.DataFrame | None, column: str) -> bool:

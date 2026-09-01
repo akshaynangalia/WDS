@@ -26,19 +26,21 @@ class MPSOutputData:
 
 
 def parse(file) -> MPSOutputData:
-    xl = pd.ExcelFile(file)
-    sheets_found = set(xl.sheet_names)
+    # Opened in a `with` block so the workbook handle is released before this
+    # function returns -- see the note in mps_input_parser.parse for why.
+    with pd.ExcelFile(file) as xl:
+        sheets_found = set(xl.sheet_names)
 
-    def _read(name: str) -> pd.DataFrame:
-        if name not in sheets_found:
-            return pd.DataFrame()
-        return xl.parse(name)
+        def _read(name: str) -> pd.DataFrame:
+            if name not in sheets_found:
+                return pd.DataFrame()
+            return xl.parse(name)
 
-    return MPSOutputData(
-        monthly_fin=_read("SKU Line Loading 1"),
-        linkcode_difc=_read("Linkcode_DIFC"),
-        sheets_found=sheets_found,
-    )
+        return MPSOutputData(
+            monthly_fin=_read("SKU Line Loading 1"),
+            linkcode_difc=_read("Linkcode_DIFC"),
+            sheets_found=sheets_found,
+        )
 
 
 def missing_sheets(data: MPSOutputData) -> list[str]:
