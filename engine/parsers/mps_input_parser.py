@@ -36,22 +36,30 @@ class MPSInputData:
 
 
 def parse(file) -> MPSInputData:
-    """Read the MPS Input workbook. `file` is a path or file-like object."""
-    xl = pd.ExcelFile(file)
-    sheets_found = set(xl.sheet_names)
+    """Read the MPS Input workbook. `file` is a path or file-like object.
 
-    def _read(name: str) -> pd.DataFrame:
-        if name not in sheets_found:
-            return pd.DataFrame()
-        return xl.parse(name)
+    The workbook is opened in a `with` block so its file handle is released
+    before this function returns. pandas' ExcelFile does not close itself; a
+    lingering handle locks the file on Windows (breaking temp-dir cleanup in
+    tests) and leaks a file descriptor per run everywhere else. Every sheet is
+    fully materialised by `xl.parse()` inside the block, so the returned
+    DataFrames do not depend on the handle staying open.
+    """
+    with pd.ExcelFile(file) as xl:
+        sheets_found = set(xl.sheet_names)
 
-    return MPSInputData(
-        sku_master=_read("SKU Master"),
-        demand=_read("2.Demand Input"),
-        period_calendar=_read("Period Calendar Matrix"),
-        soc=_read("4.SOC Sheet & Flag"),
-        sheets_found=sheets_found,
-    )
+        def _read(name: str) -> pd.DataFrame:
+            if name not in sheets_found:
+                return pd.DataFrame()
+            return xl.parse(name)
+
+        return MPSInputData(
+            sku_master=_read("SKU Master"),
+            demand=_read("2.Demand Input"),
+            period_calendar=_read("Period Calendar Matrix"),
+            soc=_read("4.SOC Sheet & Flag"),
+            sheets_found=sheets_found,
+        )
 
 
 def missing_sheets(data: MPSInputData) -> list[str]:
