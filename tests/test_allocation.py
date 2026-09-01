@@ -80,3 +80,32 @@ def test_carryover_in_is_fully_conserved_even_when_w1a_has_no_capacity(no_fallba
     assert alloc.wk1a == 0.0  # confirmed: default fallback gives zero W1A capacity
     assert assert_conservation(reconciled) == []
     assert round(alloc.total_all + alloc.carryover_next, 1) == 130.0  # 100 FIN + 30 carryover-in
+
+
+def test_missing_moq_on_one_sku_does_not_poison_its_plan_or_the_line(no_fallback):
+    # A SKU with no RCCP match has moq_days=None, which becomes NaN once it's in
+    # the consolidated frame. Before the guard in allocation.run(), `(moq_days
+    # or 0)` let that NaN through Case B and it flooded wk1..wk5, carryover, and
+    # the shared rem[wk] capacity -- the SKU (and often its line-mates) came out
+    # blank. It must instead be planned in full via Run 2 (Fallback Matrix:
+    # "MOQ absent -> unbounded"), and a second SKU sharing the line must be
+    # unaffected.
+    rows = [
+        make_row("PlantX_Line1", sku="NOMOQ", link_code="NOMOQ", current_fin=120.0,
+                 moq_days=None, opening_dos=20, target_dos=20),          # dos_gap = 0
+        make_row("PlantX_Line1", sku="HASMOQ", link_code="HASMOQ", current_fin=80.0,
+                 moq_days=5, opening_dos=20, target_dos=20, priority=2.0),
+    ]
+    result = allocation.run(make_consolidated(rows), calendar_df=None, fallback=no_fallback)
+    reconciled = reconcile(result)
+
+    assert assert_conservation(reconciled) == []
+    for alloc in reconciled.rows:
+        for wk in ("wk1a", "wk1", "wk2", "wk3", "wk4", "wk5"):
+            val = getattr(alloc, wk)
+            assert val == val, f"{alloc.sku}.{wk} is NaN"          # NaN != NaN
+        assert alloc.carryover_next == alloc.carryover_next        # not NaN
+        assert round(alloc.total_all + alloc.carryover_next, 1) == alloc.current_fin
+
+    nomoq = next(a for a in reconciled.rows if a.sku == "NOMOQ")
+    assert round(nomoq.total_all, 1) == 120.0                      # planned in full, nothing lost

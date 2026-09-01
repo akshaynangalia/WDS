@@ -142,8 +142,9 @@ def build(
         rccp_row = rccp_by_desc.get(_normalize(link_desc)) if rccp_by_desc else None
         if rccp_row is None and not fallback.use_default_priority and rccp_by_desc:
             row_assumptions.append(
-                f"No RCCP match found for '{link_desc}' — treated as if Manual Input "
-                f"were absent for this SKU."
+                f"No RCCP match for '{link_desc}' — MOQ and Target DOS not found for "
+                f"this SKU; planned with no run-length constraint (all volume via "
+                f"Run 2) and DOS gap treated as 0."
             )
 
         group_key = (plant_line, period)
@@ -159,6 +160,13 @@ def build(
             moq_days = float(rccp_row["MOQ"])
         else:
             moq_days = None  # signals "no MOQ constraint" to allocation.py
+            if rccp_row is not None and not fallback.use_default_moq:
+                # RCCP matched this SKU but its MOQ cell is blank -- flag it
+                # (the no-match case above already carries its own message).
+                row_assumptions.append(
+                    f"MOQ not found for '{link_desc}' — planned with no run-length "
+                    f"constraint (all volume via Run 2)."
+                )
 
         if rccp_row is not None and not pd.isna(rccp_row.get("Target DOS")) and not fallback.use_default_target_dos:
             target_dos = float(rccp_row["Target DOS"])

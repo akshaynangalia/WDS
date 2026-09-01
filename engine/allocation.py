@@ -21,7 +21,10 @@ a high-priority SKU's Run 1 exhausting a week's capacity first.
 If fallback.use_default_moq is set (MOQ not supplied), Run 1 is skipped
 entirely for every SKU on the affected line and 100% of FIN goes through
 Run 2 -- this is what "MOQ not supplied, run-length constraints not
-enforced" (Development Planning Document, Section 5) means concretely.
+enforced" (Development Planning Document, Section 5) means concretely. The
+same treatment is applied per-SKU to any single SKU whose MOQ is missing
+(e.g. no RCCP match for that row) even when other SKUs on the line do have
+one.
 
 Contract:
     consumes: ConsolidatedTable, calendar_df (or None), FallbackDecisions,
@@ -152,12 +155,20 @@ def run(
         run1_qty: dict[object, float] = {}
         for r in skus:
             sku = r["sku"]
-            if fallback.use_default_moq:
-                run1_qty[sku] = 0.0  # MOQ absent -> skip Run 1 entirely, Run 2 handles all of FIN
+            moq_days = r["moq_days"]
+            # No MOQ -> no run-length concept for this SKU: skip Run 1, let Run 2
+            # distribute 100% of FIN. Covers both the global fallback and a
+            # per-SKU RCCP miss (consolidation.py sets moq_days=None, which
+            # becomes NaN once it's in the frame). Applying the Fallback Matrix's
+            # "MOQ absent -> unbounded, entire FIN through Run 2" rule at SKU
+            # level. `pd.isna` catches None, Python nan and numpy nan alike --
+            # without this guard `(moq_days or 0)` lets NaN through (NaN is
+            # truthy) and it then floods wk1..wk5, carryover, and rem[wk].
+            if fallback.use_default_moq or moq_days is None or pd.isna(moq_days):
+                run1_qty[sku] = 0.0
                 continue
 
             fin = r["current_fin"]
-            moq_days = r["moq_days"]
             moq_qty_equiv = (moq_days or 0) * (r["throughput_per_day"] or 0)  # MOQ expressed as a quantity, for the 1.5x test
             dos_gap_qty = 0.0
             if r["throughput_per_day"]:
