@@ -78,17 +78,17 @@ class AllocationResult:
     capacity_messages: list[str] = field(default_factory=list)
 
 
-def _hours_needed(qty: float, throughput_per_day: float) -> float:
+def _hours_needed(qty: float, throughput_per_day: float, ge_pct: float = 1.0) -> float:
     if not throughput_per_day:
         return 0.0
-    rate_per_hour = throughput_per_day / 24.0
+    rate_per_hour = throughput_per_day / 24.0 * ge_pct  # GE% reduces the effective production rate
     return qty / rate_per_hour if rate_per_hour else 0.0
 
 
-def _qty_from_hours(hours: float, throughput_per_day: float) -> float:
+def _qty_from_hours(hours: float, throughput_per_day: float, ge_pct: float = 1.0) -> float:
     if not throughput_per_day:
         return 0.0
-    rate_per_hour = throughput_per_day / 24.0
+    rate_per_hour = throughput_per_day / 24.0 * ge_pct  # GE% reduces the effective production rate
     return hours * rate_per_hour
 
 
@@ -132,9 +132,9 @@ def run(
             alloc = allocations[r["sku"]]
             if alloc.carryover_fin_in <= 0:
                 continue
-            hrs_needed = _hours_needed(alloc.carryover_fin_in, r["throughput_per_day"])
+            hrs_needed = _hours_needed(alloc.carryover_fin_in, r["throughput_per_day"], r["ge_pct"])
             hrs_used = min(hrs_needed, rem_wk1a) if rem_wk1a > 0 else 0.0
-            produced = _qty_from_hours(hrs_used, r["throughput_per_day"]) if hrs_used else 0.0
+            produced = _qty_from_hours(hrs_used, r["throughput_per_day"], r["ge_pct"]) if hrs_used else 0.0
             alloc.wk1a = round(produced, 1)
             rem_wk1a = round(rem_wk1a - hrs_used, 1)
             residual = alloc.carryover_fin_in - produced
@@ -145,9 +145,9 @@ def run(
                     f"Carryover exceeded W1A capacity; {residual:.1f} spread across W1-W4."
                 )
                 for wk in ("wk1", "wk2", "wk3", "wk4"):
-                    hrs = _hours_needed(per_week, r["throughput_per_day"])
+                    hrs = _hours_needed(per_week, r["throughput_per_day"], r["ge_pct"])
                     hrs_used_wk = min(hrs, rem[wk])
-                    produced_wk = _qty_from_hours(hrs_used_wk, r["throughput_per_day"])
+                    produced_wk = _qty_from_hours(hrs_used_wk, r["throughput_per_day"], r["ge_pct"])
                     setattr(alloc, wk, round(getattr(alloc, wk) + produced_wk, 1))
                     rem[wk] = round(rem[wk] - hrs_used_wk, 1)
 
@@ -194,9 +194,9 @@ def run(
             for wk in active_weeks:
                 if qty - produced_total <= 0:
                     break
-                hrs_needed = _hours_needed(qty - produced_total, r["throughput_per_day"])
+                hrs_needed = _hours_needed(qty - produced_total, r["throughput_per_day"], r["ge_pct"])
                 hrs_used = min(hrs_needed, rem[wk])
-                produced = _qty_from_hours(hrs_used, r["throughput_per_day"])
+                produced = _qty_from_hours(hrs_used, r["throughput_per_day"], r["ge_pct"])
                 setattr(alloc, wk, round(getattr(alloc, wk) + produced, 1))
                 rem[wk] = round(rem[wk] - hrs_used, 1)
                 produced_total += produced
@@ -212,9 +212,9 @@ def run(
             for wk in active_weeks:
                 if remaining_fin - produced_total <= 0:
                     break
-                hrs_needed = _hours_needed(remaining_fin - produced_total, r["throughput_per_day"])
+                hrs_needed = _hours_needed(remaining_fin - produced_total, r["throughput_per_day"], r["ge_pct"])
                 hrs_used = min(hrs_needed, rem[wk])
-                produced = _qty_from_hours(hrs_used, r["throughput_per_day"])
+                produced = _qty_from_hours(hrs_used, r["throughput_per_day"], r["ge_pct"])
                 setattr(alloc, wk, round(getattr(alloc, wk) + produced, 1))
                 rem[wk] = round(rem[wk] - hrs_used, 1)
                 produced_total += produced

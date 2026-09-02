@@ -109,3 +109,28 @@ def test_missing_moq_on_one_sku_does_not_poison_its_plan_or_the_line(no_fallback
 
     nomoq = next(a for a in reconciled.rows if a.sku == "NOMOQ")
     assert round(nomoq.total_all, 1) == 120.0                      # planned in full, nothing lost
+
+
+def test_qty_and_hours_conversion_apply_ge_percent():
+    # GE% multiplies the production rate. Regression for "GE% read from SOC but
+    # never used" -- before the fix these helpers took only 2 args.
+    assert round(allocation._qty_from_hours(120, 37, 1.0), 1) == 185.0
+    assert round(allocation._qty_from_hours(120, 37, 0.8), 1) == 148.0   # 185.0 x 0.8
+    # _hours_needed is the inverse: 148 T at GE 0.8 needs the same 120 h
+    assert round(allocation._hours_needed(148.0, 37, 0.8), 1) == 120.0
+
+
+def test_ge_percent_reduces_effective_weekly_capacity(no_fallback):
+    # A line at 80% GE makes 80% of the tonnage in the same weekly hours.
+    # FIN is set above total capacity at both GE levels so the buckets are
+    # capacity-bound; asserted before reconcile(), which would otherwise force
+    # the weekly total back up to FIN.
+    def produced_before_reconcile(ge):
+        row = make_row("GEPlant_Line1", current_fin=1000.0, moq_days=None,
+                       throughput_per_day=24.0, ge_pct=ge, opening_dos=20, target_dos=20)
+        res = allocation.run(make_consolidated([row]), calendar_df=None, fallback=no_fallback)
+        return res.rows[0].total_all
+
+    full = produced_before_reconcile(1.0)
+    assert round(full, 1) == 672.0                                 # 4 wks x 168 h x 1 T/h
+    assert round(produced_before_reconcile(0.8), 1) == round(full * 0.8, 1)   # 537.6, not 672
