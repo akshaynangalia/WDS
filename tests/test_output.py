@@ -10,7 +10,7 @@ from engine.dos_difc import DIFCResult, DIFCRow
 from engine.engine_result import EngineResult
 from engine.fallback import FallbackDecisions
 from engine.reconciliation import ReconciledResult
-from output import excel_writer
+from output import comparison_table_sheet, excel_writer
 
 
 def _sample_engine_result(fallback_applied: bool) -> EngineResult:
@@ -60,3 +60,17 @@ def test_assumptions_tab_populated_when_fallback_applied():
         sheet = wb["ASSUMPTIONS_APPLIED"]
         assert sheet.max_row > 1
         assert "Calendar not supplied" in sheet.cell(row=2, column=1).value
+
+
+def test_comparison_table_has_moq_case_column():
+    # The spec lists "MOQ compliance flags" for COMPARISON_TABLE; it surfaces as
+    # the per-SKU Run 1 case (A/B/C/D or "No MOQ").
+    a = SkuAllocation(plant_line="P_L1", period=1, link_code="L1", sku="L1", priority=1.0,
+                      current_fin=100.0, carryover_fin_in=0.0, wk1=100.0, moq_case="D")
+    b = SkuAllocation(plant_line="P_L1", period=1, link_code="L2", sku="L2", priority=2.0,
+                      current_fin=50.0, carryover_fin_in=0.0, wk1=50.0, moq_case="No MOQ")
+    result = EngineResult(reconciled=ReconciledResult(rows=[a, b]), difc=DIFCResult(rows=[]),
+                          fallback=FallbackDecisions(), capacity_messages=[])
+    df = comparison_table_sheet.build_dataframe(result)
+    assert "MOQ Case" in df.columns
+    assert df.set_index("SKU / Link Code")["MOQ Case"].to_dict() == {"L1": "D", "L2": "No MOQ"}

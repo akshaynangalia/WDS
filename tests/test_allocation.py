@@ -134,3 +134,24 @@ def test_ge_percent_reduces_effective_weekly_capacity(no_fallback):
     full = produced_before_reconcile(1.0)
     assert round(full, 1) == 672.0                                 # 4 wks x 168 h x 1 T/h
     assert round(produced_before_reconcile(0.8), 1) == round(full * 0.8, 1)   # 537.6, not 672
+
+
+def test_run_records_the_moq_case_per_sku(no_fallback):
+    # COMPARISON_TABLE's "MOQ Case" column: allocation.run() must tag every SKU
+    # with the Run 1 branch that applied (A/B/C/D or "No MOQ").
+    rows = [
+        make_row("PlantA_Line1", sku="A", link_code="A", current_fin=300.0, moq_days=10,
+                 opening_dos=20, target_dos=20),                             # A: FIN < 1.5 x MOQ
+        make_row("PlantB_Line1", sku="B", link_code="B", current_fin=500.0, moq_days=5,
+                 opening_dos=20, target_dos=20),                             # B: dos_gap == 0
+        make_row("PlantC_Line1", sku="C", link_code="C", current_fin=500.0, moq_days=5,
+                 opening_dos=18, target_dos=20),                             # C: 0 < gap < MOQ
+        make_row("PlantD_Line1", sku="D", link_code="D", current_fin=500.0, moq_days=5,
+                 opening_dos=10, target_dos=20),                             # D: gap >= MOQ
+        make_row("PlantN_Line1", sku="N", link_code="N", current_fin=200.0, moq_days=None,
+                 opening_dos=20, target_dos=20),                             # no MOQ for this SKU
+    ]
+    result = allocation.run(make_consolidated(rows), calendar_df=None, fallback=no_fallback)
+    assert {a.sku: a.moq_case for a in result.rows} == {
+        "A": "A", "B": "B", "C": "C", "D": "D", "N": "No MOQ",
+    }
