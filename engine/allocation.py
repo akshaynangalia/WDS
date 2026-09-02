@@ -61,6 +61,7 @@ class SkuAllocation:
     wk5: float = 0.0
     carryover_next: float = 0.0  # CARRYOVER_MPLUS1 -- filled in by reconciliation.py
     gap_vs_fin: float = 0.0      # post-reconciliation residual, should be ~0 -- COMPARISON_TABLE field
+    moq_case: str = ""           # Run 1 branch that applied: "A"/"B"/"C"/"D"/"No MOQ" -- COMPARISON_TABLE field
     assumptions: list[str] = field(default_factory=list)
 
     @property
@@ -166,6 +167,7 @@ def run(
             # truthy) and it then floods wk1..wk5, carryover, and rem[wk].
             if fallback.use_default_moq or moq_days is None or pd.isna(moq_days):
                 run1_qty[sku] = 0.0
+                allocations[sku].moq_case = "No MOQ"
                 continue
 
             fin = r["current_fin"]
@@ -176,15 +178,16 @@ def run(
                 dos_gap_qty = r["dos_gap"] * (r["throughput_per_day"])
 
             if moq_qty_equiv and fin < 1.5 * moq_qty_equiv:
-                qty = fin  # Case A
+                qty, case = fin, "A"
             elif r["dos_gap"] == 0:
-                qty = moq_qty_equiv  # Case B
+                qty, case = moq_qty_equiv, "B"
             elif dos_gap_qty < moq_qty_equiv:
-                qty = moq_qty_equiv  # Case C
+                qty, case = moq_qty_equiv, "C"
             else:
-                qty = dos_gap_qty  # Case D
+                qty, case = dos_gap_qty, "D"
 
             run1_qty[sku] = min(qty, fin)
+            allocations[sku].moq_case = case
 
         for r in skus:
             sku = r["sku"]

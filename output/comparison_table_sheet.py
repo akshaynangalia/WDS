@@ -21,5 +21,6 @@ def build_dataframe(result: EngineResult) -> pd.DataFrame:
             "gap_vs_fin": alloc.gap_vs_fin,
             "Carryover Out (M+1)": alloc.carryover_next,
             "Active Weeks": active_weeks,
+            "MOQ Case": alloc.moq_case,  # A/B/C/D or "No MOQ" -- how MOQ governance was applied
         })
     return pd.DataFrame(rows)
