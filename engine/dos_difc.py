@@ -19,6 +19,7 @@ Contract:
 """
 from __future__ import annotations
 
+import calendar
 from dataclasses import dataclass, field
 
 import pandas as pd
@@ -26,10 +27,30 @@ import pandas as pd
 from engine.allocation import SkuAllocation
 from engine.fallback import FallbackDecisions
 
-_DAYS_IN_MONTH = {1: 31, 2: 28, 3: 31, 4: 30, 5: 31, 6: 30,
-                  7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31}
-
 WEEKS = ("wk1", "wk2", "wk3", "wk4", "wk5")
+
+
+def _days_in_month(month_num, month_key) -> int:
+    """Actual calendar days in the period's month, leap years included.
+
+    Normal case: month_num and month_key both come from the same Period
+    Calendar Matrix date, so the year is known -- "Feb-28" -> 2028 -> 29.
+    Fallbacks (each unchanged from the old hard-coded table):
+      - month_num missing (period absent from the Period Calendar Matrix):
+        no month and no year, so a coarse 30-day guess.
+      - month_num known but month_key missing/odd (not reachable with real
+        data): assume a non-leap year, so February = 28.
+    month_key is "Feb-26" style (strftime %b-%y); only its year part is read.
+    """
+    if not month_num:
+        return 30
+    year = 2001  # non-leap fallback
+    if month_key:
+        try:
+            year = 2000 + int(str(month_key).split("-")[-1])
+        except (ValueError, IndexError):
+            pass
+    return calendar.monthrange(year, int(month_num))[1]
 
 
 @dataclass
@@ -54,7 +75,7 @@ def compute(
     fallback: FallbackDecisions,
 ) -> DIFCResult:
     opening_lookup = {
-        (row["link_code"], row["period"]): (row["opening_dos"], row["month_num"])
+        (row["link_code"], row["period"]): (row["opening_dos"], row["month_num"], row.get("month_key"))
         for _, row in consolidated_df.iterrows()
     }
     demand_by_link = {}
@@ -64,8 +85,8 @@ def compute(
 
     difc_rows: list[DIFCRow] = []
     for alloc in reconciled_rows:
-        opening, month_num = opening_lookup.get((alloc.link_code, alloc.period), (0.0, None))
-        days_in_month = _DAYS_IN_MONTH.get(month_num, 30)
+        opening, month_num, month_key = opening_lookup.get((alloc.link_code, alloc.period), (0.0, None, None))
+        days_in_month = _days_in_month(month_num, month_key)
 
         demand_row = demand_by_link.get(alloc.link_code)
         monthly_demand = float(demand_row[alloc.period]) if (
