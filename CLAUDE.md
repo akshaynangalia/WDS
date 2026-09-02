@@ -39,10 +39,12 @@ The project is in UAT. Fixes must be **surgical**: touch only the files the fix 
 Every bug fix follows these five steps in order, **pausing for the user's go-ahead between step 4 and step 5**:
 
 1. **Explain the bug in plain language.** No jargon. What is broken, and why it matters.
-2. **State impact and scope.** Severity (critical / high / moderate / minor); size (how many files, roughly how many lines); the proposed fix in one or two sentences; the exact files and functions it touches.
+2. **State impact and scope.** Severity (critical / high / moderate / minor); size (how many files, roughly how many lines); the proposed fix in one or two sentences; the exact files and functions it touches; and whether a **regression test is required** (it almost always is) and which existing `tests/test_*.py` file it goes in.
 3. **Write the implementation plan.** The precise files/functions to change — and nothing else.
 4. **Review the plan against the bug.** Confirm it fixes exactly that issue and no more; cut anything not strictly required.
-5. **Execute.** Create a `fix/<short-name>` branch off `main`, apply the fix, run `pytest`, commit, push, and hand over a PR description. The user creates and merges the PR on GitHub.
+5. **Execute.** Create a `fix/<short-name>` branch off `main`, apply the fix **and its regression test**, run `pytest`, commit, push, and hand over a PR description. The user creates and merges the PR on GitHub.
+
+**Regression test for every fix.** Unless a test is genuinely not applicable (say so explicitly in step 2), each fix adds a test that fails before the change and passes after. Put it in the existing test file for that area (`tests/test_allocation.py`, `tests/test_parsers.py`, `tests/test_capacity.py`, …) — never a new standalone file — so it runs with the whole suite. Its purpose is to stop the same bug ever coming back.
 
 ## File Map
 
