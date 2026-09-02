@@ -70,10 +70,12 @@ The project is in UAT, so fixes are kept **surgical** — only the files a fix s
 Each fix goes through five steps, with a checkpoint for review before any code is changed:
 
 1. **Plain-language explanation** of what is broken and why it matters.
-2. **Impact and scope** — severity, rough size (files / lines), the proposed fix, and the exact files and functions it touches.
+2. **Impact and scope** — severity, rough size (files / lines), the proposed fix, the exact files and functions it touches, and whether a regression test is needed.
 3. **Implementation plan** — the precise changes, and nothing beyond them.
 4. **Plan review** — confirm it addresses exactly that bug and no more.
-5. **Execute** — branch (`fix/<short-name>`), fix, run `pytest`, commit, push, open a PR, merge.
+5. **Execute** — branch (`fix/<short-name>`), fix **plus its regression test**, run `pytest`, commit, push, open a PR, merge.
+
+Every fix adds a regression test — placed in the existing `tests/` file for that area so it runs with the whole suite — that fails before the change and passes after, so the bug can't silently return.
 
 The full text of this workflow is also in `CLAUDE.md`.
 
