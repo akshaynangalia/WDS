@@ -14,7 +14,8 @@ doesn't find an RCCP match is treated exactly like "RCCP missing" for that row
 
 Throughput is read from the SOC sheet's `SOC` column (per the ground-truth
 doc's stated input mapping: Throughput/GE -> "4. SOC Sheet & Flag"), with GE%
-applied as a separate multiplier in engine/capacity.py — never pre-baked in.
+applied as a separate multiplier at allocation time (engine/allocation.py's
+hours<->quantity conversion) — never pre-baked into the throughput value here.
 
 Contract:
     consumes: MPSInputData, MPSOutputData, ManualInputData, FallbackDecisions
