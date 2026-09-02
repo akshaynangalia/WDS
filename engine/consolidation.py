@@ -6,11 +6,16 @@ Priority, MOQ, Throughput and GE% all joined together.
 ASSUMPTION FLAGGED FOR CLIENT CONFIRMATION (see Development Planning Document,
 Risk Register): the sample Manual Input (RCCP) file identifies a Link Code only
 by its text description ("Link Code Desc"), not by the numeric Link Code used
-in the MPS Input/Output files. This module joins on a normalized description
-match as a best effort. A numeric Link Code column in RCCP would be far more
-reliable and should be requested from the client before go-live. Any SKU that
-doesn't find an RCCP match is treated exactly like "RCCP missing" for that row
-(same fallback defaults, logged per-row).
+in the MPS Input/Output files. This module joins **Priority and MOQ** on a
+normalized description match as a best effort. A numeric Link Code column in
+RCCP would be far more reliable and should be requested from the client before
+go-live. Any SKU that doesn't find an RCCP match gets file-order priority and
+no MOQ constraint, logged per-row.
+
+Target DOS comes from Linkcode_DIFC's `Avg_min_dos_target` column (MPS Output),
+joined by numeric Link Code -- real per-product values, and the source is
+flagged per run. If a Link Code has no value there, Target DOS defaults to
+Opening DOS (so DOS gap = 0). See LIMITATIONS.md #8.
 
 Throughput is read from the SOC sheet's `SOC` column (per the ground-truth
 doc's stated input mapping: Throughput/GE -> "4. SOC Sheet & Flag"), with GE%
@@ -143,9 +148,9 @@ def build(
         rccp_row = rccp_by_desc.get(_normalize(link_desc)) if rccp_by_desc else None
         if rccp_row is None and not fallback.use_default_priority and rccp_by_desc:
             row_assumptions.append(
-                f"No RCCP match for '{link_desc}' — MOQ and Target DOS not found for "
-                f"this SKU; planned with no run-length constraint (all volume via "
-                f"Run 2) and DOS gap treated as 0."
+                f"No RCCP match for '{link_desc}' — Priority and MOQ not found for this "
+                f"SKU; planned in file order with no run-length constraint (all volume "
+                f"via Run 2)."
             )
 
         group_key = (plant_line, period)
@@ -169,10 +174,28 @@ def build(
                     f"constraint (all volume via Run 2)."
                 )
 
-        if rccp_row is not None and not pd.isna(rccp_row.get("Target DOS")) and not fallback.use_default_target_dos:
-            target_dos = float(rccp_row["Target DOS"])
+        # Target DOS: sole source is Linkcode_DIFC's `Avg_min_dos_target` column
+        # (MPS Output), joined by numeric Link Code -- real per-product values,
+        # available even for SKUs with no RCCP text match. If a Link Code has no
+        # value there, Target DOS defaults to Opening DOS (DOS gap = 0). The
+        # source is flagged (constant strings -> one line each in the
+        # ASSUMPTIONS_APPLIED tab). See LIMITATIONS.md #8.
+        difc_target = None
+        if (difc_row is not None and "Avg_min_dos_target" in difc_row
+                and not pd.isna(difc_row["Avg_min_dos_target"])):
+            difc_target = float(difc_row["Avg_min_dos_target"])
+
+        if difc_target is not None:
+            target_dos = difc_target
+            row_assumptions.append(
+                "Target DOS is taken from Linkcode_DIFC.Avg_min_dos_target (MPS Output)."
+            )
         else:
-            target_dos = opening_dos  # forces DOS gap = 0 (Case B)
+            target_dos = opening_dos  # no Avg_min_dos_target for this Link Code -> DOS gap = 0
+            row_assumptions.append(
+                "One or more SKUs have no Linkcode_DIFC.Avg_min_dos_target value — "
+                "their DOS gap is treated as 0."
+            )
 
         soc_row = soc_by_key.get((link_code, period, plant, line))
         # ASSUMPTION: SOC's "SOC" column is the daily throughput rate, in the same
