@@ -52,6 +52,28 @@ def test_dos_gap_is_never_negative():
     assert (table.data["dos_gap"] >= 0).all()
 
 
+def test_daily_demand_is_monthly_demand_over_calendar_days():
+    # #14: the DOS gap (days of cover) is converted to a tonnage in allocation
+    # using daily demand, so consolidation must expose it as
+    # monthly demand / actual days in that period's month.
+    import calendar as _cal
+
+    mps_input, mps_output, manual_input = _load_all()
+    result = validation.validate(mps_input, mps_output, manual_input)
+    decisions = fallback.resolve(result)
+    df = consolidation.build(mps_input, mps_output, manual_input, decisions).data
+
+    assert "daily_demand" in df.columns
+    assert (df["daily_demand"] >= 0).all()
+
+    row = df[df["daily_demand"] > 0].iloc[0]
+    dem = mps_input.demand
+    drow = dem[dem["Link Code"] == row["link_code"]].iloc[0]
+    monthly = float(drow[row["period"]])
+    days = _cal.monthrange(2000 + int(str(row["month_key"]).split("-")[1]), int(row["month_num"]))[1]
+    assert round(row["daily_demand"], 4) == round(monthly / days, 4)
+
+
 def test_target_dos_comes_from_avg_min_dos_target():
     # Target DOS comes solely from Linkcode_DIFC.Avg_min_dos_target, joined by
     # numeric Link Code -- so it works even for a SKU with no RCCP text match.

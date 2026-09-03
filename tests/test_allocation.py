@@ -162,6 +162,43 @@ def test_run2_will_not_open_a_sub_moq_run_in_an_empty_week(no_fallback):
     assert round(sr.carryover_next, 1) == 80.0                  # the deferred remainder went to M+1
 
 
+def test_case_d_run1_uses_daily_demand_not_throughput(no_fallback):
+    # #14: Case D's Run 1 target is (DOS gap days x DAILY DEMAND) -- the rate
+    # that burns down days of cover -- NOT the line's production rate. Here the
+    # gap is 10 days and demand 8 T/day, so Run 1 should claim 80 T, not
+    # 10 x 40 = 400 T. A priority-1 No-MOQ filler soaks every bit of Run 2
+    # capacity, so the Case D SKU's total == exactly what Run 1 gave it.
+    filler = make_row("Tight_Line1", sku="FILL", link_code="FILL", priority=1.0,
+                      moq_days=None, throughput_per_day=40.0, current_fin=5000.0,
+                      opening_dos=20, target_dos=20)
+    sku_d = make_row("Tight_Line1", sku="D", link_code="D", priority=2.0,
+                     moq_days=2, throughput_per_day=40.0, daily_demand=8.0,
+                     current_fin=250.0, opening_dos=10.0, target_dos=20.0)  # dos_gap = 10 days
+    result = allocation.run(make_consolidated([filler, sku_d]), calendar_df=None, fallback=no_fallback)
+    d = next(a for a in result.rows if a.sku == "D")
+
+    assert d.moq_case == "D"
+    assert round(d.wk1, 1) == 80.0                       # 10 days x 8 T/day
+    assert round(d.total_current_month, 1) == 80.0       # Run 2 got nothing -- total == Run 1
+
+    reconciled = reconcile(result)
+    assert assert_conservation(reconciled) == []
+    dr = next(a for a in reconciled.rows if a.sku == "D")
+    assert round(dr.carryover_next, 1) == 170.0          # 250 FIN - 80 produced, carried to M+1
+
+
+def test_shrunk_dos_gap_moves_a_sku_from_case_d_to_case_c(no_fallback):
+    # #14 side effect: once the gap is sized by demand, a SKU whose gap tonnage
+    # falls below one MOQ batch is Case C (make one MOQ batch), where the
+    # throughput-inflated gap had wrongly put it in Case D.
+    #   gap 3 days x 9 T/day  = 27 T  <  MOQ batch (2 x 40) = 80 T  -> Case C
+    #   (buggy: 3 x 40 = 120 T  >= 80 T  -> Case D)
+    sku = make_row("L_Line1", moq_days=2, throughput_per_day=40.0, daily_demand=9.0,
+                   current_fin=500.0, opening_dos=17.0, target_dos=20.0)  # dos_gap = 3 days
+    result = allocation.run(make_consolidated([sku]), calendar_df=None, fallback=no_fallback)
+    assert result.rows[0].moq_case == "C"
+
+
 def test_run_records_the_moq_case_per_sku(no_fallback):
     # COMPARISON_TABLE's "MOQ Case" column: allocation.run() must tag every SKU
     # with the Run 1 branch that applied (A/B/C/D or "No MOQ").
