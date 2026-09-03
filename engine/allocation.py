@@ -180,10 +180,13 @@ def run(
 
             fin = r["current_fin"]
             moq_qty_equiv = (moq_days or 0) * (r["throughput_per_day"] or 0)  # MOQ expressed as a quantity, for the 1.5x test
-            dos_gap_qty = 0.0
-            if r["throughput_per_day"]:
-                # DOS gap (days) -> quantity, via the SKU's own daily throughput
-                dos_gap_qty = r["dos_gap"] * (r["throughput_per_day"])
+            # DOS gap is DAYS OF STOCK COVER; the tonnage that closes it is
+            # gap_days x daily DEMAND (the rate that burns cover down), NOT the
+            # line's production rate. This makes `dos_gap_qty < moq_qty_equiv`
+            # the exact tonnes-vs-tonnes test the legacy VBA ran on its
+            # pre-computed "FIN Gap (T)" column (dos_gap_fin < moq_hrs*throughput).
+            dd = r["daily_demand"]
+            dos_gap_qty = r["dos_gap"] * (0.0 if dd is None or pd.isna(dd) else dd)
 
             if moq_qty_equiv and fin < 1.5 * moq_qty_equiv:
                 qty, case = fin, "A"

@@ -28,6 +28,7 @@ Contract:
 """
 from __future__ import annotations
 
+import calendar
 from dataclasses import dataclass
 
 import pandas as pd
@@ -40,7 +41,7 @@ from engine.parsers.mps_output_parser import MPSOutputData, plant_line_columns
 CONSOLIDATED_COLUMNS = [
     "period", "month_num", "month_key", "plant", "line", "plant_line",
     "link_code", "link_desc", "sku",
-    "current_fin", "opening_dos", "target_dos", "dos_gap",
+    "current_fin", "opening_dos", "target_dos", "dos_gap", "daily_demand",
     "priority", "moq_days", "throughput_per_day", "ge_pct",
     "row_assumptions",
 ]
@@ -57,10 +58,13 @@ def _normalize(text) -> str:
     return str(text).strip().lower()
 
 
-def _period_to_month_info(period_calendar: pd.DataFrame) -> dict[int, tuple[int, str]]:
+def _period_to_month_info(period_calendar: pd.DataFrame) -> dict[int, tuple[int, str, int]]:
     """Period Calendar Matrix: Key (date) -> Period.
-    Returns Period -> (calendar month number, month_key string e.g. "Jun-26"),
-    the latter matching the format Calendar sheet's Key1/Key2 columns use.
+    Returns Period -> (calendar month number, month_key string e.g. "Jun-26",
+    actual days in that month). The month_key matches the Calendar sheet's
+    Key1/Key2 format; days-in-month is leap-year-correct since it comes straight
+    from the period's own date, and is used to turn monthly demand into a
+    per-day rate (see daily_demand below).
     """
     if period_calendar.empty:
         return {}
@@ -70,7 +74,7 @@ def _period_to_month_info(period_calendar: pd.DataFrame) -> dict[int, tuple[int,
         if pd.isna(key) or pd.isna(period):
             continue
         ts = pd.Timestamp(key)
-        out[int(period)] = (ts.month, ts.strftime("%b-%y"))
+        out[int(period)] = (ts.month, ts.strftime("%b-%y"), calendar.monthrange(ts.year, ts.month)[1])
     return out
 
 
@@ -115,6 +119,15 @@ def build(
             key = (row.get("Link Code"), row.get("Period"), row.get("Plant"), row.get("Line"))
             soc_by_key[key] = row
 
+    # Monthly demand lookup (2.Demand Input), keyed by Link Code with one column
+    # per period number -- same shape engine/dos_difc.py consumes. Used to turn
+    # the DOS gap (days of cover) into a tonnage at allocation time.
+    demand = mps_input.demand
+    demand_by_link = {}
+    if not demand.empty and "Link Code" in demand.columns:
+        for _, row in demand.iterrows():
+            demand_by_link[row["Link Code"]] = row
+
     records = []
     fallback_row_order_counter: dict[tuple, int] = {}
 
@@ -126,7 +139,7 @@ def build(
         plant_line = r["plant_line"]
         row_assumptions: list[str] = []
 
-        month_num, month_key = period_month.get(period, (None, None))
+        month_num, month_key, days_in_month = period_month.get(period, (None, None, None))
 
         difc_row = difc_by_link.get(link_code)
         opening_dos = None
@@ -204,6 +217,23 @@ def build(
         throughput_per_day = float(soc_row["SOC"]) if soc_row is not None and not pd.isna(soc_row.get("SOC")) else 0.0
         ge_pct = float(soc_row["GE%"]) if soc_row is not None and not pd.isna(soc_row.get("GE%")) else 1.0
 
+        # Daily demand = monthly demand (2.Demand Input, per-period column) / days
+        # in the month. This is the rate that depletes days of stock cover, so it
+        # -- not throughput -- is what converts the DOS gap into a tonnage in
+        # engine/allocation.py's Run 1 (Case D). Same definition as dos_difc.py.
+        demand_row = demand_by_link.get(link_code)
+        monthly_demand = float(demand_row[period]) if (
+            demand_row is not None and period in demand_row and not pd.isna(demand_row[period])
+        ) else 0.0
+        daily_demand = monthly_demand / (days_in_month or 30) if monthly_demand else 0.0
+
+        dos_gap = max(target_dos - opening_dos, 0.0)
+        if dos_gap > 0 and daily_demand == 0:
+            row_assumptions.append(
+                f"No monthly demand for Link Code {link_code}, period {period} — "
+                f"DOS gap cannot be sized in tonnes; it will be closed via Run 2."
+            )
+
         records.append({
             "period": period,
             "month_num": month_num,
@@ -217,7 +247,8 @@ def build(
             "current_fin": float(r["current_fin"]),
             "opening_dos": opening_dos,
             "target_dos": target_dos,
-            "dos_gap": max(target_dos - opening_dos, 0.0),
+            "dos_gap": dos_gap,
+            "daily_demand": daily_demand,
             "priority": priority,
             "moq_days": moq_days,
             "throughput_per_day": throughput_per_day,

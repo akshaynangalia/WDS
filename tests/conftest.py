@@ -19,6 +19,7 @@ def make_row(
     moq_days=None,
     throughput_per_day: float = 24.0,
     ge_pct: float = 1.0,
+    daily_demand: float | None = None,
     month_num: int = 1,
     month_key: str = "Jan-26",
 ):
@@ -28,6 +29,9 @@ def make_row(
         "plant_line": plant_line, "link_code": link_code, "link_desc": link_code, "sku": sku,
         "current_fin": current_fin, "opening_dos": opening_dos, "target_dos": target_dos,
         "dos_gap": max(target_dos - opening_dos, 0.0),
+        # Default daily_demand to throughput so tests written before #14 keep the
+        # same Case selection and Run 1 quantities; #14 tests set it explicitly.
+        "daily_demand": throughput_per_day if daily_demand is None else daily_demand,
         "priority": priority, "moq_days": moq_days,
         "throughput_per_day": throughput_per_day, "ge_pct": ge_pct,
         "row_assumptions": [],
