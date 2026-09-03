@@ -62,6 +62,8 @@ class SkuAllocation:
     carryover_next: float = 0.0  # CARRYOVER_MPLUS1 -- filled in by reconciliation.py
     gap_vs_fin: float = 0.0      # post-reconciliation residual, should be ~0 -- COMPARISON_TABLE field
     moq_case: str = ""           # Run 1 branch that applied: "A"/"B"/"C"/"D"/"No MOQ" -- COMPARISON_TABLE field
+    throughput_per_day: float = 0.0  # carried so reconciliation.py can convert its capacity ceiling hours<->quantity
+    ge_pct: float = 1.0
     assumptions: list[str] = field(default_factory=list)
 
     @property
@@ -77,6 +79,10 @@ class SkuAllocation:
 class AllocationResult:
     rows: list[SkuAllocation]
     capacity_messages: list[str] = field(default_factory=list)
+    # Real remaining weekly capacity in HOURS after all allocation passes, keyed
+    # by (plant_line, period): 24*7 - downtime - hours already used that week.
+    # reconciliation.py tops up shortfalls within -- never past -- these values.
+    leftover_capacity: dict[tuple[str, int], dict[str, float]] = field(default_factory=dict)
 
 
 def _hours_needed(qty: float, throughput_per_day: float, ge_pct: float = 1.0) -> float:
@@ -102,6 +108,7 @@ def run(
     carryover_fin_in = carryover_fin_in or {}
     all_rows: list[SkuAllocation] = []
     capacity_messages: list[str] = []
+    leftover_capacity: dict[tuple[str, int], dict[str, float]] = {}
 
     for (plant_line, period), group in consolidated.data.groupby(["plant_line", "period"], sort=False):
         plant, line = plant_line.split("_", 1)
@@ -125,6 +132,7 @@ def run(
             allocations[r["sku"]] = SkuAllocation(
                 plant_line=plant_line, period=period, link_code=r["link_code"], sku=r["sku"],
                 priority=r["priority"], current_fin=r["current_fin"], carryover_fin_in=carry_in,
+                throughput_per_day=r["throughput_per_day"], ge_pct=r["ge_pct"],
                 assumptions=list(r["row_assumptions"]),
             )
 
@@ -211,6 +219,19 @@ def run(
             remaining_fin = r["current_fin"] - alloc.total_current_month
             if remaining_fin <= 0:
                 continue
+
+            # H1: MOQ is a minimum run length. Run 2 may top up a week this SKU
+            # is already producing in by any amount, but it must not *start* a
+            # fresh run in an otherwise-empty week for less than one MOQ. Any
+            # sliver it therefore can't place is left as an open gap for
+            # reconciliation.py to fold into an existing active week (within real
+            # remaining capacity) or roll to M+1. No MOQ supplied -> no floor.
+            moq_days = r["moq_days"]
+            if fallback.use_default_moq or moq_days is None or pd.isna(moq_days):
+                moq_qty = 0.0
+            else:
+                moq_qty = (moq_days or 0) * (r["throughput_per_day"] or 0)
+
             produced_total = 0.0
             for wk in active_weeks:
                 if remaining_fin - produced_total <= 0:
@@ -218,10 +239,28 @@ def run(
                 hrs_needed = _hours_needed(remaining_fin - produced_total, r["throughput_per_day"], r["ge_pct"])
                 hrs_used = min(hrs_needed, rem[wk])
                 produced = _qty_from_hours(hrs_used, r["throughput_per_day"], r["ge_pct"])
+                if produced > 0 and getattr(alloc, wk) == 0 and produced + 1e-9 < moq_qty:
+                    continue  # would be a sub-MOQ new run -- skip, leave for reconciliation
                 setattr(alloc, wk, round(getattr(alloc, wk) + produced, 1))
                 rem[wk] = round(rem[wk] - hrs_used, 1)
                 produced_total += produced
 
+            deferred = round(remaining_fin - produced_total, 1)
+            if deferred > 0.01 and moq_qty > 0:
+                alloc.assumptions.append(
+                    f"Run 2 remainder {deferred:.1f} was below the MOQ run-length floor "
+                    f"for every unused week -- deferred to reconciliation."
+                )
+
+        leftover_capacity[(plant_line, period)] = {
+            "wk1a": rem_wk1a, "wk1": rem["wk1"], "wk2": rem["wk2"],
+            "wk3": rem["wk3"], "wk4": rem["wk4"], "wk5": rem["wk5"],
+        }
+
         all_rows.extend(allocations.values())
 
-    return AllocationResult(rows=all_rows, capacity_messages=capacity_messages)
+    return AllocationResult(
+        rows=all_rows,
+        capacity_messages=capacity_messages,
+        leftover_capacity=leftover_capacity,
+    )

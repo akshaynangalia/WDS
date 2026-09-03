@@ -38,18 +38,15 @@ def test_reconciliation_holds_across_generated_combinations():
     assert violations == [], f"{len(violations)} conservation violations, e.g.: {violations[:5]}"
 
 
-def test_large_shortfall_still_closes_via_active_bucket_adjustment():
-    """IMPORTANT DOCUMENTED ASSUMPTION: per the ground-truth doc's literal
-    wording, reconciliation distributes gap_vs_fin across ANY active bucket
-    (one with nonzero production), with no magnitude cap -- so even a huge
-    capacity-driven shortfall gets closed this way as long as the SKU got
-    *some* allocation. Only a SKU with literally zero allocation anywhere
-    rolls its gap to CARRYOVER_MPLUS1 instead (see the next test). This is a
-    literal reading of the doc, not a judgment call we made silently -- it's
-    worth the client confirming whether an *oversized* gap (like this one,
-    where FIN is ~9x actual capacity) should really be "reconciled" this way
-    rather than partially carried forward. Flagged in the Dev Plan Risk
-    Register rather than resolved unilaterally.
+def test_large_shortfall_is_capped_at_capacity_and_carried_forward():
+    """Regression for #13/H3: reconciliation must NOT close an oversized,
+    capacity-driven shortfall by inflating weekly buckets past what the line
+    can physically make. FIN here (~9x real capacity) can only be produced up
+    to the line's true weekly capacity; the rest rolls to CARRYOVER_MPLUS1.
+
+    (Supersedes the old test_large_shortfall_still_closes_via_active_bucket_
+    adjustment, which asserted the pre-fix behaviour -- gap crammed into
+    buckets, carryover_next == 0 -- that this fix deliberately removes.)
     """
     row = make_row("Tight_Line1", period=1, current_fin=5000.0, moq_days=5,
                     opening_dos=10, target_dos=10, throughput_per_day=20.0)
@@ -57,9 +54,39 @@ def test_large_shortfall_still_closes_via_active_bucket_adjustment():
     result = allocation.run(table, calendar_df=None, fallback=FallbackDecisions())
     reconciled = reconcile(result)
     alloc = reconciled.rows[0]
-    assert alloc.carryover_next == 0.0  # got *some* allocation -> gap closed via buckets, not carried
+
+    # No Calendar -> 4 full weeks at 20 T/day => 168h * (20/24) = 140 T/week.
+    week_capacity_qty = 168 * (20 / 24)
+    for wk in ("wk1", "wk1a", "wk2", "wk3", "wk4", "wk5"):
+        assert getattr(alloc, wk) <= round(week_capacity_qty, 1) + 0.05, wk
+
+    assert round(alloc.total_all, 1) == round(4 * week_capacity_qty, 1)  # 560.0, not 5000
+    assert alloc.carryover_next > 0.0                                    # remainder carried, not inflated
+    assert assert_conservation(reconciled) == []                        # 560 produced + 4440 carried == 5000
+
+
+def test_rounding_residual_still_absorbs_into_active_bucket_within_capacity():
+    """The common case must not regress: a small reconciliation gap (rounding
+    scale) still lands in an active bucket when that week has real headroom --
+    it is only the capacity-exceeding remainder that gets carried forward."""
+    from engine.allocation import AllocationResult, SkuAllocation
+
+    alloc = SkuAllocation(
+        plant_line="P_L", period=1, link_code="L1", sku="L1", priority=1.0,
+        current_fin=100.0, carryover_fin_in=0.0,
+        throughput_per_day=24.0, ge_pct=1.0,
+    )
+    alloc.wk1 = 99.6  # 0.4 short of FIN -- a rounding-sized residual
+    result = AllocationResult(
+        rows=[alloc],
+        leftover_capacity={("P_L", 1): {
+            "wk1a": 0.0, "wk1": 50.0, "wk2": 0.0, "wk3": 0.0, "wk4": 0.0, "wk5": 0.0,
+        }},
+    )
+    reconciled = reconcile(result)
+    assert reconciled.rows[0].carryover_next == 0.0
+    assert round(reconciled.rows[0].wk1, 1) == 100.0
     assert assert_conservation(reconciled) == []
-    assert round(alloc.total_all, 1) == 5000.0
 
 
 def test_sku_with_zero_capacity_left_carries_entire_fin_forward():

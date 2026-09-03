@@ -136,6 +136,32 @@ def test_ge_percent_reduces_effective_weekly_capacity(no_fallback):
     assert round(produced_before_reconcile(0.8), 1) == round(full * 0.8, 1)   # 537.6, not 672
 
 
+def test_run2_will_not_open_a_sub_moq_run_in_an_empty_week(no_fallback):
+    # H1: a high-priority No-MOQ SKU consumes Run 2 capacity and leaves only a
+    # sub-MOQ sliver (52 T, vs a 120 T MOQ run length) free in wk4. Run 2 must
+    # NOT drop that sliver into wk4 for the low-priority SKU as a tiny
+    # standalone run -- the SKU keeps only its Run 1 MOQ batch and the
+    # unplaceable 80 T remainder carries to M+1 (no active week has room).
+    hungry = make_row("Tight_Line1", sku="HUNGRY", link_code="HUNGRY", priority=1.0,
+                      current_fin=500.0, moq_days=None, throughput_per_day=24.0,
+                      opening_dos=20, target_dos=20)
+    starved = make_row("Tight_Line1", sku="STARVED", link_code="STARVED", priority=2.0,
+                       current_fin=200.0, moq_days=5, throughput_per_day=24.0,
+                       opening_dos=20, target_dos=20)          # Case B -> Run 1 places one 120 T batch
+    result = allocation.run(make_consolidated([hungry, starved]), calendar_df=None, fallback=no_fallback)
+    starved_alloc = next(a for a in result.rows if a.sku == "STARVED")
+
+    assert round(starved_alloc.wk1, 1) == 120.0                # the Run 1 MOQ batch
+    assert starved_alloc.wk4 == 0.0                            # Run 2 did NOT open a sub-MOQ run here
+    assert any("below the MOQ run-length floor" in m for m in starved_alloc.assumptions)
+
+    reconciled = reconcile(result)
+    assert assert_conservation(reconciled) == []
+    sr = next(a for a in reconciled.rows if a.sku == "STARVED")
+    assert round(sr.total_all + sr.carryover_next, 1) == 200.0  # nothing lost
+    assert round(sr.carryover_next, 1) == 80.0                  # the deferred remainder went to M+1
+
+
 def test_run_records_the_moq_case_per_sku(no_fallback):
     # COMPARISON_TABLE's "MOQ Case" column: allocation.run() must tag every SKU
     # with the Run 1 branch that applied (A/B/C/D or "No MOQ").
