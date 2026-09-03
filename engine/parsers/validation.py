@@ -32,7 +32,6 @@ class ValidationResult:
     calendar_present: bool
     priority_present: bool
     moq_present: bool
-    target_dos_present: bool
     weekly_demand_present: bool
 
     errors: list[str] = field(default_factory=list)
@@ -71,7 +70,6 @@ def validate(
         calendar_present=calendar_present,
         priority_present=manual_input_parser.has_column(manual_input.rccp, "Priority"),
         moq_present=manual_input_parser.has_column(manual_input.rccp, "MOQ"),
-        target_dos_present=manual_input_parser.has_column(manual_input.rccp, "Target DOS"),
         weekly_demand_present=weekly_demand_present,
         errors=errors,
     )

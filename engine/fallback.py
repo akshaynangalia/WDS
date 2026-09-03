@@ -21,7 +21,6 @@ from engine.parsers.validation import ValidationResult
 class FallbackDecisions:
     use_default_priority: bool = False
     use_default_moq: bool = False
-    use_default_target_dos: bool = False
     use_default_calendar: bool = False
     use_monthly_avg_dos: bool = False
     messages: list[str] = field(default_factory=list)
@@ -47,12 +46,9 @@ def resolve(validation: ValidationResult) -> FallbackDecisions:
             "MOQ not supplied — run-length constraints not enforced."
         )
 
-    if not validation.target_dos_present:
-        decisions.use_default_target_dos = True
-        decisions.messages.append(
-            "Target DOS not supplied — no urgency-based front-loading; allocation "
-            "is capacity-driven only."
-        )
+    # Target DOS is not a Manual-Input concern: it comes solely from
+    # Linkcode_DIFC.Avg_min_dos_target (MPS Output). engine/consolidation.py
+    # flags the source per run.
 
     if not validation.calendar_present:
         decisions.use_default_calendar = True

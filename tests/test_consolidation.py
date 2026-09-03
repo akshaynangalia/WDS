@@ -11,8 +11,14 @@ from __future__ import annotations
 
 import os
 
+import pandas as pd
+
 from engine import consolidation, fallback
+from engine.fallback import FallbackDecisions
 from engine.parsers import manual_input_parser, mps_input_parser, mps_output_parser, validation
+from engine.parsers.manual_input_parser import ManualInputData
+from engine.parsers.mps_input_parser import MPSInputData
+from engine.parsers.mps_output_parser import MPSOutputData
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "sample_files")
 
@@ -44,6 +50,65 @@ def test_dos_gap_is_never_negative():
     decisions = fallback.resolve(result)
     table = consolidation.build(mps_input, mps_output, manual_input, decisions)
     assert (table.data["dos_gap"] >= 0).all()
+
+
+def test_target_dos_comes_from_avg_min_dos_target():
+    # Target DOS comes solely from Linkcode_DIFC.Avg_min_dos_target, joined by
+    # numeric Link Code -- so it works even for a SKU with no RCCP text match.
+    mps_input = MPSInputData(
+        sku_master=pd.DataFrame(),
+        demand=pd.DataFrame(),
+        period_calendar=pd.DataFrame({"Key": [pd.Timestamp("2026-02-01")], "Period": [1]}),
+        soc=pd.DataFrame({"Link Code": [111, 222], "Period": [1, 1], "Plant": ["P", "P"],
+                          "Line": ["L", "L"], "GE%": [1.0, 1.0], "SOC": [24.0, 24.0]}),
+        sheets_found=set(),
+    )
+    mps_output = MPSOutputData(
+        monthly_fin=pd.DataFrame({
+            "Period": [1, 1], "SKU": [111, 222], "Link Code": [111, 222],
+            "Link Desc Description": ["Prod A", "Prod B"], "P_L": [100.0, 50.0],
+        }),
+        linkcode_difc=pd.DataFrame({
+            "Link Code": [111, 222], 1: [25.0, 20.0], "Avg_min_dos_target": [42.0, 35.0],
+        }),
+        sheets_found=set(),
+    )
+    manual_input = ManualInputData(
+        rccp=pd.DataFrame({"Link Code Desc": ["Prod A"], "Priority": [1.0], "MOQ": [5.0]}),
+        calendar=None, sheets_found={"RCCP"},
+    )
+
+    df = consolidation.build(mps_input, mps_output, manual_input, FallbackDecisions()).data
+    by_link = df.set_index("link_code")
+
+    assert by_link.loc[111, "target_dos"] == 42.0   # from Avg_min_dos_target
+    assert by_link.loc[111, "dos_gap"] == 17.0      # 42 - 25
+    assert by_link.loc[222, "target_dos"] == 35.0   # applied even with no RCCP match
+    assert by_link.loc[222, "dos_gap"] == 15.0      # 35 - 20
+    assert any("Avg_min_dos_target" in a for a in by_link.loc[111, "row_assumptions"])
+
+
+def test_target_dos_falls_back_to_opening_when_avg_min_dos_target_missing():
+    # No Avg_min_dos_target value -> target = opening -> DOS gap 0, and it's flagged.
+    mps_input = MPSInputData(
+        sku_master=pd.DataFrame(), demand=pd.DataFrame(),
+        period_calendar=pd.DataFrame({"Key": [pd.Timestamp("2026-02-01")], "Period": [1]}),
+        soc=pd.DataFrame({"Link Code": [111], "Period": [1], "Plant": ["P"], "Line": ["L"],
+                          "GE%": [1.0], "SOC": [24.0]}),
+        sheets_found=set(),
+    )
+    mps_output = MPSOutputData(
+        monthly_fin=pd.DataFrame({"Period": [1], "SKU": [111], "Link Code": [111],
+                                  "Link Desc Description": ["Prod A"], "P_L": [100.0]}),
+        linkcode_difc=pd.DataFrame({"Link Code": [111], 1: [25.0], "Avg_min_dos_target": [float("nan")]}),
+        sheets_found=set(),
+    )
+    manual_input = ManualInputData(rccp=None, calendar=None, sheets_found=set())
+
+    df = consolidation.build(mps_input, mps_output, manual_input, FallbackDecisions()).data
+    assert df.iloc[0]["target_dos"] == 25.0   # == opening_dos
+    assert df.iloc[0]["dos_gap"] == 0.0
+    assert any("no Linkcode_DIFC.Avg_min_dos_target" in a for a in df.iloc[0]["row_assumptions"])
 
 
 def test_no_rccp_match_falls_back_gracefully_without_crashing():
