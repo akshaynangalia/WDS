@@ -25,6 +25,11 @@ back to a separator-agnostic normalised match, and finally to a bare line
 name with no plant prefix at all (accepted only when it uniquely identifies
 one column) -- so the match survives naming drift without guessing wrong.
 
+A blank downtime cell (once the column IS found) means "nothing recorded for
+this line-week" -- i.e. 0 downtime, a normal full week -- and is read that
+way via _numeric_or_zero(), never as the unbounded capacity a naive
+`value or 0` would silently produce for a NaN cell.
+
 Contract:
     consumes: calendar_df (or None), plant, line, month_key, month_num
     produces: CapacityBuckets, list[str] of assumption messages
@@ -62,6 +67,16 @@ def _find_week_row(calendar_df: pd.DataFrame, month_key: str, week_label: str):
         return None
     match = calendar_df[calendar_df["Key2"] == f"{month_key}|{week_label}"]
     return match.iloc[0] if not match.empty else None
+
+
+def _numeric_or_zero(value, default: float = 0.0) -> float:
+    """A blank Calendar cell means "no downtime recorded for this line-week"
+    -- i.e. 0, a normal full week -- never "infinite". Python's `value or 0`
+    idiom gets this wrong for a blank cell: pandas reads it as NaN, and NaN is
+    truthy, so `nan or 0` evaluates to `nan`, not `0`. That NaN then behaves as
+    unlimited capacity everywhere it's used downstream. `pd.isna` catches
+    None/NaN alike and is the only correct way to spot a blank cell here."""
+    return default if pd.isna(value) else float(value)
 
 
 def _norm(s) -> str:
@@ -156,9 +171,9 @@ def build(
         wk1a = 0.0
         wk1 = FULL_WEEK_HOURS
     else:
-        allocated_prev = float(w1_row.get("Allocated Days - Previous Month", 0) or 0)
-        allocated_curr = float(w1_row.get("Allocated Days - Current Month", 7) or 7)
-        downtime_total_wk1 = float(w1_row.get(downtime_col, 0) or 0)
+        allocated_prev = _numeric_or_zero(w1_row.get("Allocated Days - Previous Month"), default=0.0)
+        allocated_curr = _numeric_or_zero(w1_row.get("Allocated Days - Current Month"), default=7.0)
+        downtime_total_wk1 = _numeric_or_zero(w1_row.get(downtime_col))
         downtime_wk1a = (allocated_prev / 7) * downtime_total_wk1
         downtime_wk1 = (allocated_curr / 7) * downtime_total_wk1
         wk1a = round(24 * allocated_prev - downtime_wk1a, 1)
@@ -173,7 +188,7 @@ def build(
                     f"using default full-week capacity."
                 )
             return FULL_WEEK_HOURS
-        downtime = float(row.get(downtime_col, 0) or 0)
+        downtime = _numeric_or_zero(row.get(downtime_col))
         return round(FULL_WEEK_HOURS - downtime, 1)
 
     wk2 = _week_capacity("W2")
