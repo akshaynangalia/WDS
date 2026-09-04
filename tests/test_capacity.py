@@ -36,3 +36,52 @@ def test_w1a_w1_split_from_calendar():
     assert caps.wk1 == round(24 * 4 - (4 / 7) * 24, 1)
     assert caps.wk2 == capacity.FULL_WEEK_HOURS
     assert not messages  # calendar fully present, not a five-week month -- no fallback should fire
+
+
+def test_matches_plant_underscore_line_convention():
+    # #12: the client's current, preferred Calendar convention -- the column
+    # header copied verbatim from the monthly plan's own "Plant_Line" column
+    # (e.g. "Induri_Induri ML"), not the older "Plant - Line" spacing.
+    calendar_df = pd.DataFrame([
+        {"Key1": "Jul-26", "Key2": "Jul-26|W1", "Allocated Days - Previous Month": 0,
+         "Allocated Days - Current Month": 7, "Induri_Induri ML": 24},
+        {"Key1": "Jul-26", "Key2": "Jul-26|W2", "Induri_Induri ML": 0},
+        {"Key1": "Jul-26", "Key2": "Jul-26|W3", "Induri_Induri ML": 0},
+        {"Key1": "Jul-26", "Key2": "Jul-26|W4", "Induri_Induri ML": 0},
+    ])
+    caps, messages = capacity.build(calendar_df, "Induri", "Induri ML", "Jul-26", 7)  # month 7 -> not a five-week month
+    assert caps.wk1 == round(24 * 7 - 24, 1)
+    assert caps.wk2 == capacity.FULL_WEEK_HOURS
+    assert not messages  # exact "Plant_Line" match -- no fallback, no fuzzy-match note either
+
+
+def test_matches_line_name_alone_when_no_plant_prefix_present():
+    # A Calendar column that carries just the line name, with no plant prefix
+    # at all, is still accepted -- but only because it's the unique such
+    # column on the sheet.
+    calendar_df = pd.DataFrame([
+        {"Key1": "Jul-26", "Key2": "Jul-26|W1", "Allocated Days - Previous Month": 0,
+         "Allocated Days - Current Month": 7, "Shell": 48},
+        {"Key1": "Jul-26", "Key2": "Jul-26|W2", "Shell": 0},
+        {"Key1": "Jul-26", "Key2": "Jul-26|W3", "Shell": 0},
+        {"Key1": "Jul-26", "Key2": "Jul-26|W4", "Shell": 0},
+    ])
+    caps, messages = capacity.build(calendar_df, "Induri", "Shell", "Jul-26", 7)
+    assert caps.wk1 == round(24 * 7 - 48, 1)
+    assert messages and "line name alone" in messages[0]
+
+
+def test_no_matching_column_falls_back_loudly_and_names_what_it_searched():
+    # A genuine miss (client hasn't added this line to the Calendar sheet at
+    # all) must fall back to full-week capacity, but say exactly what it
+    # looked for -- never a silent guess.
+    calendar_df = pd.DataFrame([
+        {"Key1": "Jun-26", "Key2": "Jun-26|W1", "Allocated Days - Previous Month": 0,
+         "Allocated Days - Current Month": 7, "Induri_Induri ML": 24},
+    ])
+    caps, messages = capacity.build(calendar_df, "Malanpur", "Malanpur ML", "Jun-26", 6)
+    assert caps.wk1 == capacity.FULL_WEEK_HOURS
+    assert len(messages) == 1  # one loud message, not one per week
+    assert "Malanpur/Malanpur ML" in messages[0]
+    assert "Malanpur_Malanpur ML" in messages[0]  # names the exact column it tried
+    assert "Induri_Induri ML" in messages[0]      # and what the sheet actually has
