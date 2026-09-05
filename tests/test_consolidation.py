@@ -88,7 +88,8 @@ def test_target_dos_comes_from_avg_min_dos_target():
     mps_output = MPSOutputData(
         monthly_fin=pd.DataFrame({
             "Period": [1, 1], "SKU": [111, 222], "Link Code": [111, 222],
-            "Link Desc Description": ["Prod A", "Prod B"], "P_L": [100.0, 50.0],
+            "Link Desc Description": ["Prod A", "Prod B"], "Brand": ["BrandA", "BrandB"],
+            "P_L": [100.0, 50.0],
         }),
         linkcode_difc=pd.DataFrame({
             "Link Code": [111, 222], 1: [25.0, 20.0], "Avg_min_dos_target": [42.0, 35.0],
@@ -121,7 +122,8 @@ def test_target_dos_falls_back_to_opening_when_avg_min_dos_target_missing():
     )
     mps_output = MPSOutputData(
         monthly_fin=pd.DataFrame({"Period": [1], "SKU": [111], "Link Code": [111],
-                                  "Link Desc Description": ["Prod A"], "P_L": [100.0]}),
+                                  "Link Desc Description": ["Prod A"], "Brand": ["BrandA"],
+                                  "P_L": [100.0]}),
         linkcode_difc=pd.DataFrame({"Link Code": [111], 1: [25.0], "Avg_min_dos_target": [float("nan")]}),
         sheets_found=set(),
     )

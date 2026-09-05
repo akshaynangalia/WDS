@@ -1,4 +1,4 @@
-"""Writes the COMPARISON_TABLE tab (auditability) — Architecture Document, Section 5.9."""
+"""Writes the Comparison Table tab (auditability) — Architecture Document, Section 5.9."""
 from __future__ import annotations
 
 import pandas as pd
@@ -12,15 +12,19 @@ def build_dataframe(result: EngineResult) -> pd.DataFrame:
     for alloc in result.reconciled.rows:
         active_weeks = sum(1 for wk in WEEK_ORDER if getattr(alloc, wk) > 0)
         rows.append({
-            "Plant / Line": alloc.plant_line.replace("_", " / "),
-            "SKU / Link Code": alloc.sku,
+            "Plant": alloc.plant,
+            "Line": alloc.line,
+            "Linkcode": alloc.link_code,
+            "Brand": alloc.brand,
+            "Link Desc Description": alloc.link_desc,
+            "Month": alloc.month_key,
             "Period": alloc.period,
-            "FIN": alloc.current_fin,
-            "Carryover In": alloc.carryover_fin_in,
-            "Total Produced": round(alloc.total_all, 1),
+            "Total FIN(T)": alloc.current_fin,
+            "OPENING CARRYOVER": alloc.carryover_fin_in,
+            "TOTAL PRODUCED": round(alloc.total_all, 1),
+            "CARRYOVER_MPLUS1": alloc.carryover_next,
             "gap_vs_fin": alloc.gap_vs_fin,
-            "Carryover Out (M+1)": alloc.carryover_next,
-            "Active Weeks": active_weeks,
-            "MOQ Case": alloc.moq_case,  # A/B/C/D or "No MOQ" -- how MOQ governance was applied
+            "ACTIVE WEEKS": active_weeks,
+            "CASE": alloc.moq_case,  # A/B/C/D or "No MOQ" -- how MOQ governance was applied
         })
     return pd.DataFrame(rows)

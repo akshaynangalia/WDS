@@ -65,6 +65,17 @@ class SkuAllocation:
     throughput_per_day: float = 0.0  # carried so reconciliation.py can convert its capacity ceiling hours<->quantity
     ge_pct: float = 1.0
     assumptions: list[str] = field(default_factory=list)
+    # Output-only identifying/context fields -- carried through unchanged by
+    # reconciliation/carryover/changeover (they only mutate the fields above)
+    # so the output layer can render Plant/Line/Brand/etc. without re-joining.
+    plant: str = ""
+    line: str = ""
+    brand: object = None
+    link_desc: object = None
+    month_key: str = ""
+    opening_dos: float = 0.0
+    target_dos: float = 0.0
+    moq_days: object = None  # raw RCCP MOQ (days), None if not supplied -- WEEKLY_PLAN's "MOQ" column
 
     @property
     def total_current_month(self) -> float:
@@ -134,6 +145,9 @@ def run(
                 priority=r["priority"], current_fin=r["current_fin"], carryover_fin_in=carry_in,
                 throughput_per_day=r["throughput_per_day"], ge_pct=r["ge_pct"],
                 assumptions=list(r["row_assumptions"]),
+                plant=plant, line=line, brand=r.get("brand"), link_desc=r.get("link_desc"),
+                month_key=month_key, opening_dos=r["opening_dos"], target_dos=r["target_dos"],
+                moq_days=r["moq_days"],
             )
 
         # --- Carryover (W1A) pass: happens before Run 1, per ground-truth doc ---

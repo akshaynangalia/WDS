@@ -26,7 +26,8 @@ def make_row(
     return {
         "period": period, "month_num": month_num, "month_key": month_key,
         "plant": plant_line.split("_", 1)[0], "line": plant_line.split("_", 1)[1],
-        "plant_line": plant_line, "link_code": link_code, "link_desc": link_code, "sku": sku,
+        "plant_line": plant_line, "link_code": link_code, "link_desc": link_code,
+        "brand": link_code, "sku": sku,
         "current_fin": current_fin, "opening_dos": opening_dos, "target_dos": target_dos,
         "dos_gap": max(target_dos - opening_dos, 0.0),
         # Default daily_demand to throughput so tests written before #14 keep the

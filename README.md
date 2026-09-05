@@ -51,7 +51,7 @@ Three Excel workbooks are needed for a run:
 2. **MPS Output** — sheets: SKU Line Loading 1 (monthly FIN), Linkcode_DIFC
 3. **Manual Input** — sheets: RCCP (Priority, MOQ, Target DOS, Throughput), Calendar (working days, downtime)
 
-**MPS Input and MPS Output are mandatory** — the run cannot proceed without them. **Manual Input is optional** — if it's missing or partial, the tool still runs, but falls back to conservative defaults and clearly flags every affected output (an amber banner in the UI, and an `ASSUMPTIONS_APPLIED` tab in the downloaded workbook). See the Development Planning Document, Section 5, for the exact default applied per missing field.
+**MPS Input and MPS Output are mandatory** — the run cannot proceed without them. **Manual Input is optional** — if it's missing or partial, the tool still runs, but falls back to conservative defaults and clearly flags every affected output (an amber banner in the UI, and an `Assumption Applied` tab in the downloaded workbook). See the Development Planning Document, Section 5, for the exact default applied per missing field.
 
 ## Project Structure
 

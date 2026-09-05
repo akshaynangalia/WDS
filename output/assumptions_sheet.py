@@ -1,5 +1,5 @@
 """
-Writes the ASSUMPTIONS_APPLIED tab — Development Planning Document, Section 6
+Writes the Assumption Applied tab — Development Planning Document, Section 6
 ("a planner opening the file six weeks from now should understand why a
 number looks the way it does, without asking the person who ran it").
 
