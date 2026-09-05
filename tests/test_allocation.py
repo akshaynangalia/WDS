@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pandas as pd
+
 from engine import allocation
 from engine.fallback import FallbackDecisions
 from engine.reconciliation import assert_conservation, reconcile
@@ -80,6 +82,30 @@ def test_carryover_in_is_fully_conserved_even_when_w1a_has_no_capacity(no_fallba
     assert alloc.wk1a == 0.0  # confirmed: default fallback gives zero W1A capacity
     assert assert_conservation(reconciled) == []
     assert round(alloc.total_all + alloc.carryover_next, 1) == 130.0  # 100 FIN + 30 carryover-in
+
+
+def test_leftover_w1a_capacity_is_freed_for_current_month_production(no_fallback):
+    # #18: ground-truth doc -- "If carryover_fin <= W1A capacity: produce full
+    # carryover in W1A; remaining W1A capacity is freed for current month."
+    # No carryover-in at all here, so the entire W1A allocation (3 prior-month
+    # days = 72h, zero downtime) must be freed into wk1's pool rather than
+    # stranded. wk1 alone (4 current-month days = 96h) can't hold a 150T FIN
+    # at 24 T/day (1 T/hr); only with the freed 72h merged in (168h total)
+    # does the whole FIN fit in wk1 with nothing spilling into wk2.
+    calendar_df = pd.DataFrame([
+        {"Key1": "Jul-26", "Key2": "Jul-26|W1", "Allocated Days - Previous Month": 3,
+         "Allocated Days - Current Month": 4, "PlantF - LineF": 0},
+        {"Key1": "Jul-26", "Key2": "Jul-26|W2", "PlantF - LineF": 0},
+        {"Key1": "Jul-26", "Key2": "Jul-26|W3", "PlantF - LineF": 0},
+        {"Key1": "Jul-26", "Key2": "Jul-26|W4", "PlantF - LineF": 0},
+    ])
+    row = make_row("PlantF_LineF", current_fin=150.0, moq_days=None, throughput_per_day=24.0,
+                   opening_dos=20, target_dos=20, month_num=7, month_key="Jul-26")
+    result = allocation.run(make_consolidated([row]), calendar_df, no_fallback)
+    alloc = result.rows[0]
+    assert alloc.wk1a == 0.0   # no carryover-in -> nothing recorded as W1A production
+    assert alloc.wk1 == 150.0  # whole FIN fits once the freed W1A hours merge into wk1
+    assert alloc.wk2 == 0.0    # -- previously: wk1=96.0, wk2=54.0 (capacity stranded)
 
 
 def test_missing_moq_on_one_sku_does_not_poison_its_plan_or_the_line(no_fallback):

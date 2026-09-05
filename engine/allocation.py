@@ -160,6 +160,18 @@ def run(
                     setattr(alloc, wk, round(getattr(alloc, wk) + produced_wk, 1))
                     rem[wk] = round(rem[wk] - hrs_used_wk, 1)
 
+        # Any W1A capacity no SKU's carryover consumed is freed for the current
+        # month's regular production (ground-truth doc: "If carryover_fin <=
+        # W1A capacity: produce full carryover in W1A; remaining W1A capacity
+        # is freed for current month"). W1A and W1 are the same physical week,
+        # split only by which calendar month the days belong to, so the
+        # leftover hours merge into wk1's shared pool -- available to every
+        # SKU on the line via Run 1/Run 2, not just whichever SKU(s) had
+        # carryover. #18.
+        if rem_wk1a > 0:
+            rem["wk1"] = round(rem["wk1"] + rem_wk1a, 1)
+            rem_wk1a = 0.0
+
         # --- Run 1: DOS-gap closure (Case A/B/C/D) ---
         run1_qty: dict[object, float] = {}
         for r in skus:
