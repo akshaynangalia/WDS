@@ -49,7 +49,7 @@ Three Excel workbooks are needed for a run:
 
 1. **MPS Input** — sheets: SKU Master, Demand Input, Period Calendar Matrix, SOC Sheet & Flag
 2. **MPS Output** — sheets: SKU Line Loading 1 (monthly FIN), Linkcode_DIFC
-3. **Manual Input** — sheets: RCCP (Priority, MOQ, Target DOS, Throughput), Calendar (working days, downtime)
+3. **Manual Input** — sheets: Priority(Linkcode Level) (per-period Priority, MOQ — Link-Code level, joined by Link Code/Plant/Line), Calendar (working days, downtime)
 
 **MPS Input and MPS Output are mandatory** — the run cannot proceed without them. **Manual Input is optional** — if it's missing or partial, the tool still runs, but falls back to conservative defaults and clearly flags every affected output (an amber banner in the UI, and an `Assumption Applied` tab in the downloaded workbook). See the Development Planning Document, Section 5, for the exact default applied per missing field.
 
@@ -85,8 +85,7 @@ Not yet reached. Per project sequencing (Development Planning Document, Rule 7):
 
 ## Open Items Discovered While Building (need client confirmation)
 
-1. **RCCP join key.** The Manual Input RCCP sheet identifies a product only by a text description ("Link Code Desc"), while MPS Input/Output use a numeric Link Code. `engine/consolidation.py` joins on a normalized text match as a best effort — any SKU that doesn't find a match is treated exactly like "RCCP missing" for that row. A numeric Link Code column in RCCP would be far more reliable.
-2. **Reconciliation gap magnitude.** Per a literal reading of the ground-truth logic doc, reconciliation closes `gap_vs_fin` across any bucket that already has some production, with no cap on the gap's size — so even a very large capacity-driven shortfall gets "closed" this way as long as the SKU got *some* allocation (only a SKU with zero allocation anywhere rolls forward to `CARRYOVER_MPLUS1`). Worth confirming this is the intended behavior for genuinely oversized gaps, not just small rounding residuals. See `tests/test_reconciliation_invariant.py`.
+1. **Reconciliation gap magnitude.** Per a literal reading of the ground-truth logic doc, reconciliation closes `gap_vs_fin` across any bucket that already has some production, with no cap on the gap's size — so even a very large capacity-driven shortfall gets "closed" this way as long as the SKU got *some* allocation (only a SKU with zero allocation anywhere rolls forward to `CARRYOVER_MPLUS1`). Worth confirming this is the intended behavior for genuinely oversized gaps, not just small rounding residuals. See `tests/test_reconciliation_invariant.py`.
 
 ## Known Deferred Scope
 

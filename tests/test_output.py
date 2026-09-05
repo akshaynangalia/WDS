@@ -72,12 +72,12 @@ def test_weekly_plan_notes_column_joins_row_assumptions():
     alloc = SkuAllocation(
         plant_line="P_L", period=1, link_code="L1", sku="L1", priority=1.0,
         current_fin=100.0, carryover_fin_in=0.0, wk1=100.0,
-        assumptions=["Priority defaulted to file order (no RCCP match)."],
+        assumptions=["Priority defaulted to file order, after every matched Link Code (no Priority(Linkcode Level) match for this row/period)."],
     )
     result = EngineResult(reconciled=ReconciledResult(rows=[alloc]), difc=DIFCResult(rows=[]),
                           fallback=FallbackDecisions(), capacity_messages=[])
     df = weekly_plan_sheet.build_dataframe(result)
-    assert df.iloc[0]["Notes"] == "Priority defaulted to file order (no RCCP match)."
+    assert df.iloc[0]["Notes"] == "Priority defaulted to file order, after every matched Link Code (no Priority(Linkcode Level) match for this row/period)."
 
 
 def test_header_row_is_styled_purple_with_white_bold_text():

@@ -109,7 +109,7 @@ def test_leftover_w1a_capacity_is_freed_for_current_month_production(no_fallback
 
 
 def test_missing_moq_on_one_sku_does_not_poison_its_plan_or_the_line(no_fallback):
-    # A SKU with no RCCP match has moq_days=None, which becomes NaN once it's in
+    # A SKU with no Priority(Linkcode Level) match has moq_days=None, which becomes NaN once it's in
     # the consolidated frame. Before the guard in allocation.run(), `(moq_days
     # or 0)` let that NaN through Case B and it flooded wk1..wk5, carryover, and
     # the shared rem[wk] capacity -- the SKU (and often its line-mates) came out

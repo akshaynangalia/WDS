@@ -23,7 +23,7 @@ entirely for every SKU on the affected line and 100% of FIN goes through
 Run 2 -- this is what "MOQ not supplied, run-length constraints not
 enforced" (Development Planning Document, Section 5) means concretely. The
 same treatment is applied per-SKU to any single SKU whose MOQ is missing
-(e.g. no RCCP match for that row) even when other SKUs on the line do have
+(e.g. no Priority(Linkcode Level) match for that row) even when other SKUs on the line do have
 one.
 
 Contract:
@@ -75,7 +75,7 @@ class SkuAllocation:
     month_key: str = ""
     opening_dos: float = 0.0
     target_dos: float = 0.0
-    moq_days: object = None  # raw RCCP MOQ (days), None if not supplied -- WEEKLY_PLAN's "MOQ" column
+    moq_days: object = None  # raw Priority(Linkcode Level) MOQ (days), None if not supplied -- Weekly Plan's "MOQ" column
 
     @property
     def total_current_month(self) -> float:
@@ -193,7 +193,7 @@ def run(
             moq_days = r["moq_days"]
             # No MOQ -> no run-length concept for this SKU: skip Run 1, let Run 2
             # distribute 100% of FIN. Covers both the global fallback and a
-            # per-SKU RCCP miss (consolidation.py sets moq_days=None, which
+            # per-SKU Priority(Linkcode Level) miss (consolidation.py sets moq_days=None, which
             # becomes NaN once it's in the frame). Applying the Fallback Matrix's
             # "MOQ absent -> unbounded, entire FIN through Run 2" rule at SKU
             # level. `pd.isna` catches None, Python nan and numpy nan alike --
