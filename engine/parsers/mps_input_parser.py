@@ -8,6 +8,18 @@ Sheets read:
     - 4.SOC Sheet & Flag    -> GE% and SOC (used as effective throughput proxy) per
                                Link Code / Period / Plant / Line
 
+SKU Master is the DESIGNATED SKU <-> Link Code mapping sheet -- but it is
+parsed and validated here, then never consumed downstream. engine/consolidation.py
+currently pulls SKU and Link Code straight off the FIN sheet (MPS Output's
+`SKU Line Loading 1`) instead, which is harmless only because SKU == Link Code
+1:1 in all current client data. If a SKU <-> Link Code mapping is ever actually
+needed by future code -- most notably once the parked FIN-source switch to
+`Link Code Line Loading 1` happens (that sheet has no SKU column at all) -- it
+must come from THIS sheet, not from the FIN sheet. See LIMITATIONS.md L4:
+SKU Master itself has no column literally named "SKU" (its closest analog is
+"List Code"), so that still needs client confirmation before any code relies
+on it for a real mapping.
+
 See Development Planning Document, Section 2.2, for this module's contract:
     consumes: a file path or file-like object
     produces: MPSInputData

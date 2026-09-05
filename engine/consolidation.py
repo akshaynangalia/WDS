@@ -87,6 +87,13 @@ def build(
     monthly_fin = mps_output.monthly_fin
     plant_line_cols = plant_line_columns(monthly_fin)
 
+    # SKU and Link Code both come from the FIN sheet here -- NOT from
+    # mps_input.sku_master, which is parsed but otherwise unused (see its
+    # module docstring and LIMITATIONS.md L4). This only works because
+    # SKU == Link Code 1:1 in all current client data. If the parked
+    # FIN-source switch to `Link Code Line Loading 1` ever happens, that
+    # sheet has no SKU column at all -- this melt would need to source SKU
+    # from mps_input.sku_master instead, not from here.
     long_fin = monthly_fin.melt(
         id_vars=["Period", "SKU", "Link Code", "Link Desc Description", "Brand"],
         value_vars=plant_line_cols,
