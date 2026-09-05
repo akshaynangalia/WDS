@@ -28,7 +28,13 @@ def make_layout():
             html.Div(
                 className="header-bar",
                 children=[
-                    html.Div("Mondelez International", className="header-brand"),
+                    html.Div(
+                        className="header-left",
+                        children=[
+                            html.Img(src="/assets/mdlz_logo.png", className="header-logo"),
+                            html.Div("Mondelez International", className="header-brand"),
+                        ],
+                    ),
                     html.Div("Weekly Disaggregation Tool", className="header-title"),
                 ],
             ),
