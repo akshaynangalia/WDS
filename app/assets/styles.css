@@ -13,6 +13,8 @@ body {
     padding: 14px 24px;
 }
 
+.header-left { display: flex; align-items: center; gap: 10px; }
+.header-logo { height: 32px; width: auto; display: block; }
 .header-brand { font-weight: 700; font-size: 18px; }
 .header-title { font-size: 13px; opacity: 0.9; }
 
