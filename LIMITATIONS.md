@@ -143,3 +143,39 @@ just the requirement text.
 Nothing has been built against a guessed answer to any of these — `moq_case`
 "B"/"C"/"D" and the MOQ-as-floor behavior in `allocation.py`/Run 2's `H1` rule
 are unchanged pending a client answer.
+
+---
+
+## L4 — SKU Master is the designated SKU↔Link Code mapping sheet, but it has no column literally named "SKU", and is not consumed anywhere today
+
+**What it is.** The MPS Input workbook's `SKU Master` sheet is intended as the
+SKU↔Link Code mapping (per its own column header comment in
+`engine/parsers/mps_input_parser.py`), but `engine/consolidation.py` currently
+pulls SKU and Link Code straight off the FIN sheet (MPS Output's
+`SKU Line Loading 1`) instead, which already carries both columns per row.
+`SKU Master` is parsed and confirmed non-empty, then never read again.
+
+**The sheet itself has a gap.** `SKU Master`'s actual columns are `Brand`,
+`Link Code`, `Link Desc Description`, `List Code`, `List Description` — there
+is no column literally named `SKU`. `List Code` is the closest analog (and
+equals `Link Code` in every sample row, consistent with SKU == Link Code 1:1
+today), but this has not been confirmed with the client as the intended SKU
+identifier.
+
+**Impact today.** None — SKU and Link Code are identical for all 991 client
+rows, so sourcing the mapping from the FIN sheet instead of `SKU Master`
+produces the same result either way.
+
+**Why it matters going forward.** This stops being a non-issue the moment
+either (a) the parked FIN-source switch to `Link Code Line Loading 1` happens
+— that sheet has no SKU column at all, making `SKU Master` the *only* place a
+genuine SKU↔Link Code mapping could come from — or (b) CR-04's SKU-vs-Link-Code
+granularity question is ever resolved in favor of real SKU-level planning.
+Code now carries an explicit note (in `mps_input_parser.py`'s module docstring
+and a comment at `consolidation.py`'s FIN-sheet melt) pointing future work at
+`SKU Master`, not the FIN sheet, for this mapping — but the missing `SKU`
+column still needs a client answer before anything can actually be wired to
+depend on it.
+
+**Open question for the client.** Does `List Code` in `SKU Master` represent
+the SKU, or is a dedicated `SKU` column needed?
