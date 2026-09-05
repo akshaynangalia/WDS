@@ -40,7 +40,7 @@ from engine.parsers.mps_output_parser import MPSOutputData, plant_line_columns
 
 CONSOLIDATED_COLUMNS = [
     "period", "month_num", "month_key", "plant", "line", "plant_line",
-    "link_code", "link_desc", "sku",
+    "link_code", "link_desc", "brand", "sku",
     "current_fin", "opening_dos", "target_dos", "dos_gap", "daily_demand",
     "priority", "moq_days", "throughput_per_day", "ge_pct",
     "row_assumptions",
@@ -88,7 +88,7 @@ def build(
     plant_line_cols = plant_line_columns(monthly_fin)
 
     long_fin = monthly_fin.melt(
-        id_vars=["Period", "SKU", "Link Code", "Link Desc Description"],
+        id_vars=["Period", "SKU", "Link Code", "Link Desc Description", "Brand"],
         value_vars=plant_line_cols,
         var_name="plant_line",
         value_name="current_fin",
@@ -192,7 +192,7 @@ def build(
         # available even for SKUs with no RCCP text match. If a Link Code has no
         # value there, Target DOS defaults to Opening DOS (DOS gap = 0). The
         # source is flagged (constant strings -> one line each in the
-        # ASSUMPTIONS_APPLIED tab). See LIMITATIONS.md #8.
+        # Assumption Applied tab). See LIMITATIONS.md #8.
         difc_target = None
         if (difc_row is not None and "Avg_min_dos_target" in difc_row
                 and not pd.isna(difc_row["Avg_min_dos_target"])):
@@ -243,6 +243,7 @@ def build(
             "plant_line": plant_line,
             "link_code": link_code,
             "link_desc": link_desc,
+            "brand": r["Brand"],
             "sku": r["SKU"],
             "current_fin": float(r["current_fin"]),
             "opening_dos": opening_dos,

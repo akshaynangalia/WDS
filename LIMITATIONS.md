@@ -24,7 +24,7 @@ sample data this affects ~19 SKUs across 5 lines — for example `Mignonettes`,
 `BVL 50% Orange`, `BVL 70% Orange`, and the EDGE range.
 
 **What the tool does today.** Every unmatched SKU is flagged on the amber banner
-and in the `ASSUMPTIONS_APPLIED` tab, and is planned using fallback defaults:
+and in the `Assumption Applied` tab, and is planned using fallback defaults:
 priority by file order, and **no run-length (MOQ) constraint — its full volume is
 distributed in Run 2** (see L2). Target DOS still resolves via `Linkcode_DIFC`
 (#8), so an unmatched SKU can still have a real DOS gap. Before the
@@ -44,7 +44,7 @@ Priority / MOQ join exact and remove this entire class of issue.
 real per-product values (0–60 days in the sample), available even for SKUs with
 no RCCP text match. It is not taken from Manual Input at all. If a Link Code has
 no value in that column, `target_dos = opening_dos` (so the DOS gap is 0). Every
-run flags the source in the amber banner and the `ASSUMPTIONS_APPLIED` tab.
+run flags the source in the amber banner and the `Assumption Applied` tab.
 
 **Assumption to confirm with the client:** that `Avg_min_dos_target` in
 `Linkcode_DIFC` *is* the intended Target DOS. The name ("average minimum DOS
@@ -62,7 +62,7 @@ one SKU had no RCCP match (L1), or because its MOQ cell is blank.
 Document, Section 5): MOQ absent → run-length constraint not enforced → Run 1's
 Case A/B/C/D branching is skipped for that SKU and **100% of its FIN is
 distributed in Run 2**. This is applied per-SKU, not only when the whole file is
-absent. Each affected SKU is flagged in `ASSUMPTIONS_APPLIED`.
+absent. Each affected SKU is flagged in `Assumption Applied`.
 
 **Requested change (pending).** Planning preference is that a missing-MOQ SKU
 should instead be split into **two approximately equal runs**, flagged as such.

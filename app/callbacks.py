@@ -153,5 +153,5 @@ def register_callbacks(app: Dash):
         if result.status.value == "failed":
             return f"Run failed: {'; '.join(result.errors)}", None
 
-        status_text = "Run complete" + (" (degraded mode — see ASSUMPTIONS_APPLIED tab)" if result.status.value == "degraded" else "")
+        status_text = "Run complete" + (" (degraded mode — see Assumption Applied tab)" if result.status.value == "degraded" else "")
         return status_text, dcc.send_file(result.output_path)
