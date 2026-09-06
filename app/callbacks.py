@@ -73,7 +73,7 @@ def register_callbacks(app: Dash):
         if contents is None:
             return [], None
         data = manual_input_parser.parse(_decode(contents))
-        checklist = _checklist(["RCCP", "Calendar"], data.sheets_found)
+        checklist = _checklist(["Priority(Linkcode Level)", "Calendar"], data.sheets_found)
         return checklist, contents
 
     @app.callback(

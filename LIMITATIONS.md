@@ -9,31 +9,42 @@ residual limitation remains.
 
 ---
 
-## L1 — RCCP is matched to the plan by product name text, not Link Code
+## L1 — RCCP was matched to the plan by product name text, not Link Code
 
-**What it is.** The Manual Input **RCCP** sheet identifies each product only by a
-free-text `Link Code Desc` (e.g. `CDM 20`, `Silk Bubbly Large SEA`). The MPS
-Input / MPS Output files identify the same product by a numeric **Link Code**.
-`engine/consolidation.py` joins **Priority and MOQ** by normalising and matching
-that text. (Target DOS is no longer on this join — see #8.)
+**Resolved (REQ-CR-01 rebuild).** The old Manual Input **RCCP** sheet identified
+each product only by a free-text `Link Code Desc`, joined to the plan by
+normalizing and matching that text — ~19 SKUs across 5 lines had no match at
+all (e.g. `Mignonettes`, `CDM 10 Rural`, `CDM Milkinis Large`/`Small`, `Silk
+Bubbly Large Nepal`, `BVL 50%/70% Orange`, the EDGE range).
 
-**Impact.** When a product's description in the plan does not exactly match any
-`Link Code Desc` in RCCP, that SKU gets **no Priority and no MOQ**. In the client
-sample data this affects ~19 SKUs across 5 lines — for example `Mignonettes`,
-`CDM 10 Rural`, `CDM Milkinis Large` / `Small`, `Silk Bubbly Large Nepal`,
-`BVL 50% Orange`, `BVL 70% Orange`, and the EDGE range.
+RCCP has been replaced entirely by **`Priority(Linkcode Level)`**, joined by
+**(Link Code, Plant, Line)** — a numeric, exact join, not text matching. The
+same Link Code can carry a different Priority/MOQ depending on which physical
+line produces it (confirmed against the real client file), which is why the
+join key is three fields, not one. Checked against the real client dataset:
+**100% join coverage** — every (Link Code, Plant, Line) combination that
+actually appears in the FIN sheet has a matching row, zero misses.
 
-**What the tool does today.** Every unmatched SKU is flagged on the amber banner
-and in the `Assumption Applied` tab, and is planned using fallback defaults:
-priority by file order, and **no run-length (MOQ) constraint — its full volume is
-distributed in Run 2** (see L2). Target DOS still resolves via `Linkcode_DIFC`
-(#8), so an unmatched SKU can still have a real DOS gap. Before the
-`fix/missing-moq-nan` fix, an unmatched SKU with a zero DOS gap was instead
-dropped from the plan entirely (blank row); that is now resolved.
+Priority is now read per-period (columns `1`–`14`, matching `Linkcode_DIFC` /
+`2.Demand Input`'s own convention) instead of a single static value, so it can
+differ month to month for the same Link Code/Line (the actual ask behind
+REQ-CR-01). MOQ stays a single value — not extended to a month dimension
+(client decision, since it was never formally in CR-01's scope).
 
-**Open question for the client.** *Can the RCCP sheet include the numeric Link
-Code column* (alongside or instead of the text description)? That would make the
-Priority / MOQ join exact and remove this entire class of issue.
+**Bundled fix.** A separate bug found during this rebuild is now also fixed:
+a Link Code with no match used to get a bare file-order counter that could
+land *ahead of or tied with* a Link Code with a real, planner-assigned
+priority. Unmatched Link Codes now always sort strictly after every matched
+one in their (Plant/Line, Period) group, then by file order among themselves.
+
+**SKU-level priority is out of scope — structurally, not by coincidence.**
+`Priority(Linkcode Level)` has no SKU column at all. SKU-level priority
+sequencing (the two-key language in the flow doc's "SKU Sequencing and
+Prioritization" section, and CR-04's SKU-vs-Link-Code hierarchy) has no basis
+in this or any other current input. This is a structural fact about the input
+set, independent of whether SKU happens to equal Link Code in today's data —
+that coincidence is not the reason SKU-level priority is out of scope, and
+shouldn't be relied on as one.
 
 ---
 
@@ -42,7 +53,7 @@ Priority / MOQ join exact and remove this entire class of issue.
 **Resolved (`fix/target-dos-from-difc`).** Target DOS is read **solely** from
 `Linkcode_DIFC.Avg_min_dos_target` (MPS Output), joined by numeric Link Code —
 real per-product values (0–60 days in the sample), available even for SKUs with
-no RCCP text match. It is not taken from Manual Input at all. If a Link Code has
+no Priority(Linkcode Level) match. It is not taken from Manual Input at all. If a Link Code has
 no value in that column, `target_dos = opening_dos` (so the DOS gap is 0). Every
 run flags the source in the amber banner and the `Assumption Applied` tab.
 
@@ -54,9 +65,10 @@ target") strongly implies it, and the sample value range fits.
 
 ## L2 — Behaviour when a SKU's MOQ is missing
 
-**What it is.** MOQ ("Maximum Run-Length") comes from RCCP. A SKU can be missing
-it either because the whole Manual Input file was not supplied, or because that
-one SKU had no RCCP match (L1), or because its MOQ cell is blank.
+**What it is.** MOQ ("Maximum Run-Length") comes from Priority(Linkcode Level).
+A SKU can be missing it either because the whole Manual Input file was not
+supplied, or because that one Link Code/Plant/Line had no match (L1), or
+because its MOQ cell is blank.
 
 **What the tool does today.** Per the Fallback Matrix (Development Planning
 Document, Section 5): MOQ absent → run-length constraint not enforced → Run 1's

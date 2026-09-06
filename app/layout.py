@@ -18,7 +18,7 @@ from app.components.upload_card import make_upload_card
 
 MPS_INPUT_SHEETS = ["SKU Master", "2.Demand Input", "Period Calendar Matrix", "4.SOC Sheet & Flag"]
 MPS_OUTPUT_SHEETS = ["SKU Line Loading 1", "Linkcode_DIFC"]
-MANUAL_INPUT_SHEETS = ["RCCP", "Calendar"]
+MANUAL_INPUT_SHEETS = ["Priority(Linkcode Level)", "Calendar"]
 
 
 def make_layout():

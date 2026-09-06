@@ -28,7 +28,7 @@ class ValidationResult:
     mps_output_missing_sheets: list[str]
 
     manual_input_present: bool
-    rccp_present: bool
+    priority_sheet_present: bool
     calendar_present: bool
     priority_present: bool
     moq_present: bool
@@ -57,7 +57,7 @@ def validate(
     if mps_output_missing:
         errors.append(f"MPS Output is missing required sheet(s): {', '.join(mps_output_missing)}")
 
-    rccp_present = manual_input.rccp is not None and not manual_input.rccp.empty
+    priority_sheet_present = manual_input.priority is not None and not manual_input.priority.empty
     calendar_present = manual_input.calendar is not None and not manual_input.calendar.empty
 
     return ValidationResult(
@@ -65,11 +65,13 @@ def validate(
         mps_input_missing_sheets=mps_input_missing,
         mps_output_ok=not mps_output_missing,
         mps_output_missing_sheets=mps_output_missing,
-        manual_input_present=rccp_present or calendar_present,
-        rccp_present=rccp_present,
+        manual_input_present=priority_sheet_present or calendar_present,
+        priority_sheet_present=priority_sheet_present,
         calendar_present=calendar_present,
-        priority_present=manual_input_parser.has_column(manual_input.rccp, "Priority"),
-        moq_present=manual_input_parser.has_column(manual_input.rccp, "MOQ"),
+        # Priority(Linkcode Level) has no single "Priority" column -- it's
+        # replaced by per-period columns "1".."14" (REQ-CR-01).
+        priority_present=manual_input_parser.has_period_columns(manual_input.priority),
+        moq_present=manual_input_parser.has_column(manual_input.priority, "MOQ"),
         weekly_demand_present=weekly_demand_present,
         errors=errors,
     )

@@ -14,9 +14,8 @@ This is a Python + Dash tool for Mondelez that converts a Monthly Production Pla
 
 ## Current Status
 
-**Phase 0 through Phase 8 have an initial implementation drafted and passing 34 automated tests** (parsers, consolidation, capacity, allocation, reconciliation, carryover, DOS/DIFC, output, run manager end-to-end, layering, and the Dash layout-ID audit). This was built in a single compressed pass rather than strictly one phase at a time — Rule 1 still applies going forward from here. **Not yet done:** Phase 9 (full local UAT against a real, date-aligned dataset), Phase 10 (GitHub), Phase 11 (Posit Connect). Two open items were discovered during this pass and need client confirmation before Phase 9 can be considered complete:
-1. RCCP identifies products by text description, not the numeric Link Code used elsewhere — the join in `engine/consolidation.py` is a best-effort text match.
-2. Reconciliation closes a gap via active-bucket adjustment regardless of magnitude (per a literal reading of the ground-truth doc) — see the note in `tests/test_reconciliation_invariant.py::test_large_shortfall_still_closes_via_active_bucket_adjustment`.
+**Phase 0 through Phase 8 have an initial implementation drafted and passing 34 automated tests** (parsers, consolidation, capacity, allocation, reconciliation, carryover, DOS/DIFC, output, run manager end-to-end, layering, and the Dash layout-ID audit). This was built in a single compressed pass rather than strictly one phase at a time — Rule 1 still applies going forward from here. **Not yet done:** Phase 9 (full local UAT against a real, date-aligned dataset), Phase 10 (GitHub), Phase 11 (Posit Connect). One open item remains from that pass (a second, the RCCP text-match join, was resolved by the REQ-CR-01 rebuild — see LIMITATIONS.md L1):
+1. Reconciliation closes a gap via active-bucket adjustment regardless of magnitude (per a literal reading of the ground-truth doc) — see the note in `tests/test_reconciliation_invariant.py::test_large_shortfall_still_closes_via_active_bucket_adjustment`.
 
 > Update this section at every phase boundary from here on.
 
@@ -85,6 +84,6 @@ Run 2 distributes whatever FIN remains against remaining weekly capacity, never 
 - Don't deploy anything to Posit Connect before Phase 11.
 - Don't push to the *company* GitHub / Posit pipeline before Phase 10. (The personal repo `github.com/akshaynangalia/WDS`, used for review and PR-based bug fixing during UAT, is a separate track and is fine to push to — client-confirmed 2026-09-01.)
 - Don't guess at REQ-CR-05 (split-week changeover) logic — `engine/changeover.py` stays a documented no-op until the client provides the resolved rule. See Dev Plan Risk Register item 1.
-- Don't add SKU-level Priority/MOQ handling — RCCP stays Link-Code level per client decision (Risk Register item 2).
+- Don't add SKU-level Priority/MOQ handling — Priority(Linkcode Level) (formerly RCCP) stays Link-Code level per client decision (Risk Register item 2).
 - Don't reproduce the "ID not found in layout" Dash pattern seen in the reference prototype screenshots — `tests/test_ui_layout_ids.py` exists specifically to catch this (Risk Register item 5).
 - Don't invent fallback behavior beyond Dev Plan Section 5's Fallback Matrix — if a genuinely new missing-input scenario comes up, flag it in the Risk Register rather than guessing a default.

@@ -3,14 +3,34 @@ Reconstructs the legacy tool's "Consolidated Input" equivalent: one row per
 Plant-Line-SKU-Period, with Current FIN, Opening DOS, Target DOS, DOS Gap,
 Priority, MOQ, Throughput and GE% all joined together.
 
-ASSUMPTION FLAGGED FOR CLIENT CONFIRMATION (see Development Planning Document,
-Risk Register): the sample Manual Input (RCCP) file identifies a Link Code only
-by its text description ("Link Code Desc"), not by the numeric Link Code used
-in the MPS Input/Output files. This module joins **Priority and MOQ** on a
-normalized description match as a best effort. A numeric Link Code column in
-RCCP would be far more reliable and should be requested from the client before
-go-live. Any SKU that doesn't find an RCCP match gets file-order priority and
-no MOQ constraint, logged per-row.
+Priority and MOQ come from the Manual Input workbook's `Priority(Linkcode
+Level)` sheet (REQ-CR-01 rebuild -- replaces the old text-matched "RCCP"
+sheet; see LIMITATIONS.md L1, resolved), joined by **(Link Code, Plant,
+Line)** -- not Link Code alone, since the same Link Code can carry a
+different Priority/MOQ depending on which physical line produces it
+(confirmed against the real client file: Link Code 324811 differs between
+DPC Baddi/DPC-Choc and Makson B/Makson B). Priority is read per-period
+(bare-integer columns "1".."14", matching Linkcode_DIFC / 2.Demand Input's
+own convention) rather than a single static value, so it can differ month to
+month for the same Link Code/Line. MOQ stays a single value -- not extended
+to a month dimension (client decision, since it was never formally in
+CR-01's scope).
+
+Priority(Linkcode Level) is Link-Code level by design -- it has no SKU
+column at all. SKU-level priority sequencing (the two-key language in the
+flow doc's "SKU Sequencing and Prioritization" section, and CR-04's
+SKU-vs-Link-Code hierarchy) has no basis in this or any other current
+input. This is a structural fact about the input set, independent of
+whether SKU happens to equal Link Code in today's data -- that coincidence
+is not the reason SKU-level priority is out of scope, and shouldn't be
+relied on as one.
+
+Any FIN row whose (Link Code, Plant, Line) has no match in Priority(Linkcode
+Level) gets no MOQ constraint (all volume via Run 2) and sorts *after*
+every real-priority row in its (plant_line, period) group -- never
+interleaved with real priorities via a bare counter landing in the same
+field (the pre-pass below computes each group's max real priority for
+exactly this reason).
 
 Target DOS comes from Linkcode_DIFC's `Avg_min_dos_target` column (MPS Output),
 joined by numeric Link Code -- real per-product values, and the source is
@@ -50,12 +70,6 @@ CONSOLIDATED_COLUMNS = [
 @dataclass
 class ConsolidatedTable:
     data: pd.DataFrame  # columns per CONSOLIDATED_COLUMNS
-
-
-def _normalize(text) -> str:
-    if pd.isna(text):
-        return ""
-    return str(text).strip().lower()
 
 
 def _period_to_month_info(period_calendar: pd.DataFrame) -> dict[int, tuple[int, str, int]]:
@@ -112,11 +126,14 @@ def build(
         for _, row in difc.iterrows():
             difc_by_link[row["Link Code"]] = row
 
-    # RCCP lookup, keyed by normalized Link Code Desc (best-effort — see module docstring)
-    rccp_by_desc = {}
-    if manual_input.rccp is not None and "Link Code Desc" in manual_input.rccp.columns:
-        for _, row in manual_input.rccp.iterrows():
-            rccp_by_desc[_normalize(row.get("Link Code Desc"))] = row
+    # Priority/MOQ lookup, keyed by (Link Code, Plant, Line) -- the same Link
+    # Code can carry a different Priority/MOQ depending on which physical line
+    # produces it (see module docstring).
+    priority_by_key = {}
+    if (manual_input.priority is not None
+            and {"Link Code", "Plant", "Line"}.issubset(manual_input.priority.columns)):
+        for _, row in manual_input.priority.iterrows():
+            priority_by_key[(row.get("Link Code"), row.get("Plant"), row.get("Line"))] = row
 
     # SOC lookup for throughput/GE%, keyed by (Link Code, Period, Plant, Line)
     soc = mps_input.soc
@@ -134,6 +151,26 @@ def build(
     if not demand.empty and "Link Code" in demand.columns:
         for _, row in demand.iterrows():
             demand_by_link[row["Link Code"]] = row
+
+    # Pre-pass: per (plant_line, period) group, find the highest real priority
+    # value among Link Codes that DO match Priority(Linkcode Level), so
+    # unmatched Link Codes can be sorted strictly after every matched one in
+    # the main loop below -- never interleaved via a bare counter landing in
+    # the same field as real, planner-assigned priorities.
+    max_priority_by_group: dict[tuple, float] = {}
+    if priority_by_key and not fallback.use_default_priority:
+        for _, r in long_fin.iterrows():
+            period = int(r["Period"])
+            priority_row = priority_by_key.get((r["Link Code"], r["plant"], r["line"]))
+            if priority_row is None or period not in priority_row.index:
+                continue
+            val = priority_row[period]
+            if pd.isna(val):
+                continue
+            group_key = (r["plant_line"], period)
+            val = float(val)
+            if val > max_priority_by_group.get(group_key, 0.0):
+                max_priority_by_group[group_key] = val
 
     records = []
     fallback_row_order_counter: dict[tuple, int] = {}
@@ -165,38 +202,48 @@ def build(
                 f"defaulted to 0."
             )
 
-        rccp_row = rccp_by_desc.get(_normalize(link_desc)) if rccp_by_desc else None
-        if rccp_row is None and not fallback.use_default_priority and rccp_by_desc:
+        priority_row = priority_by_key.get((link_code, plant, line)) if priority_by_key else None
+        if priority_row is None and not fallback.use_default_priority and priority_by_key:
             row_assumptions.append(
-                f"No RCCP match for '{link_desc}' — Priority and MOQ not found for this "
-                f"SKU; planned in file order with no run-length constraint (all volume "
-                f"via Run 2)."
+                f"No Priority(Linkcode Level) match for Link Code {link_code} at "
+                f"{plant}/{line} — Priority and MOQ not found for this row; planned in "
+                f"file order with no run-length constraint (all volume via Run 2)."
             )
 
         group_key = (plant_line, period)
-        if rccp_row is not None and not pd.isna(rccp_row.get("Priority")) and not fallback.use_default_priority:
-            priority = float(rccp_row["Priority"])
+        priority_val = priority_row.get(period) if priority_row is not None else None
+        if (priority_row is not None and period in priority_row.index
+                and not pd.isna(priority_val) and not fallback.use_default_priority):
+            priority = float(priority_val)
         else:
+            # Unmatched (or no value for this specific period): sort strictly
+            # after every real-priority row in this (plant_line, period) group,
+            # then by file order among themselves -- never interleaved with
+            # real priorities via a bare counter landing in the same field.
             fallback_row_order_counter[group_key] = fallback_row_order_counter.get(group_key, 0) + 1
-            priority = float(fallback_row_order_counter[group_key])
+            priority = max_priority_by_group.get(group_key, 0.0) + fallback_row_order_counter[group_key]
             if "Priority not supplied" not in "".join(fallback.messages):
-                row_assumptions.append("Priority defaulted to file order (no RCCP match).")
+                row_assumptions.append(
+                    "Priority defaulted to file order, after every matched Link Code "
+                    "(no Priority(Linkcode Level) match for this row/period)."
+                )
 
-        if rccp_row is not None and not pd.isna(rccp_row.get("MOQ")) and not fallback.use_default_moq:
-            moq_days = float(rccp_row["MOQ"])
+        if priority_row is not None and not pd.isna(priority_row.get("MOQ")) and not fallback.use_default_moq:
+            moq_days = float(priority_row["MOQ"])
         else:
             moq_days = None  # signals "no MOQ constraint" to allocation.py
-            if rccp_row is not None and not fallback.use_default_moq:
-                # RCCP matched this SKU but its MOQ cell is blank -- flag it
-                # (the no-match case above already carries its own message).
+            if priority_row is not None and not fallback.use_default_moq:
+                # Matched on (Link Code, Plant, Line) but its MOQ cell is blank
+                # -- flag it (the no-match case above already carries its own
+                # message).
                 row_assumptions.append(
-                    f"MOQ not found for '{link_desc}' — planned with no run-length "
-                    f"constraint (all volume via Run 2)."
+                    f"MOQ not found for Link Code {link_code} at {plant}/{line} — "
+                    f"planned with no run-length constraint (all volume via Run 2)."
                 )
 
         # Target DOS: sole source is Linkcode_DIFC's `Avg_min_dos_target` column
         # (MPS Output), joined by numeric Link Code -- real per-product values,
-        # available even for SKUs with no RCCP text match. If a Link Code has no
+        # available even for a Link Code with no Priority(Linkcode Level) match. If a Link Code has no
         # value there, Target DOS defaults to Opening DOS (DOS gap = 0). The
         # source is flagged (constant strings -> one line each in the
         # Assumption Applied tab). See LIMITATIONS.md #8.

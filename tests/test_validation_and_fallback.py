@@ -22,7 +22,7 @@ def test_can_run_with_all_three_files():
     manual_input = manual_input_parser.parse(os.path.join(FIXTURES, "Manual_Input.xlsx"))
     result = validation.validate(_real_mps_input(), _real_mps_output(), manual_input)
     assert result.can_run
-    assert result.rccp_present
+    assert result.priority_sheet_present
     assert result.calendar_present
     decisions = fallback.resolve(result)
     # Weekly Demand is never present in any of the three sample workbooks (matches the
@@ -62,11 +62,14 @@ def test_degraded_mode_when_manual_input_absent():
 
 
 def test_partial_manual_input_only_flags_missing_fields():
-    # RCCP has Priority + MOQ and Calendar is present -> none of those fallbacks
-    # fire. (Target DOS is not a Manual-Input concern; it comes from Linkcode_DIFC.)
-    rccp = pd.DataFrame({"Link Code Desc": ["X"], "Priority": [1], "MOQ": [5]})
-    manual_input = manual_input_parser.ManualInputData(rccp=rccp, calendar=pd.DataFrame({"a": [1]}),
-                                                        sheets_found={"RCCP", "Calendar"})
+    # Priority(Linkcode Level) has per-period priority + MOQ, and Calendar is
+    # present -> none of those fallbacks fire. (Target DOS is not a
+    # Manual-Input concern; it comes from Linkcode_DIFC.)
+    priority = pd.DataFrame({"Link Code": [1], "Plant": ["P"], "Line": ["L"], "MOQ": [5], 1: [1]})
+    manual_input = manual_input_parser.ManualInputData(
+        priority=priority, calendar=pd.DataFrame({"a": [1]}),
+        sheets_found={"Priority(Linkcode Level)", "Calendar"},
+    )
     result = validation.validate(_real_mps_input(), _real_mps_output(), manual_input)
     decisions = fallback.resolve(result)
     assert not decisions.use_default_priority

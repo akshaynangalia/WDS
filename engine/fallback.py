@@ -3,7 +3,7 @@ Implements the Fallback Matrix — Development Planning Document, Section 5.
 
 MPS Input and MPS Output have no fallback (the run hard-stops if either is
 missing — enforced by ValidationResult.can_run, checked in run_manager).
-Manual Input (RCCP + Calendar) is the one input with defined defaults, applied
+Manual Input (Priority(Linkcode Level) + Calendar) is the one input with defined defaults, applied
 per missing field rather than as a single all-or-nothing switch.
 
 Contract:
