@@ -262,6 +262,7 @@ def run(
                 moq_qty = (moq_days or 0) * (r["throughput_per_day"] or 0)
 
             produced_total = 0.0
+            moq_blocked = False  # True only if a week had SOME capacity but not enough for one MOQ run
             for wk in active_weeks:
                 if remaining_fin - produced_total <= 0:
                     break
@@ -269,6 +270,7 @@ def run(
                 hrs_used = min(hrs_needed, rem[wk])
                 produced = _qty_from_hours(hrs_used, r["throughput_per_day"], r["ge_pct"])
                 if produced > 0 and getattr(alloc, wk) == 0 and produced + 1e-9 < moq_qty:
+                    moq_blocked = True
                     continue  # would be a sub-MOQ new run -- skip, leave for reconciliation
                 setattr(alloc, wk, round(getattr(alloc, wk) + produced, 1))
                 rem[wk] = round(rem[wk] - hrs_used, 1)
@@ -276,10 +278,23 @@ def run(
 
             deferred = round(remaining_fin - produced_total, 1)
             if deferred > 0.01 and moq_qty > 0:
-                alloc.assumptions.append(
-                    f"Run 2 remainder {deferred:.1f} was below the MOQ run-length floor "
-                    f"for every unused week -- deferred to reconciliation."
-                )
+                if moq_blocked:
+                    # At least one week had real leftover capacity, but not enough
+                    # for one full MOQ-sized run -- the MOQ floor is the actual cause.
+                    alloc.assumptions.append(
+                        f"Run 2 remainder {deferred:.1f} was below the MOQ run-length floor "
+                        f"for every unused week -- deferred to reconciliation."
+                    )
+                else:
+                    # Every week was already at zero remaining capacity -- the
+                    # MOQ floor was never even tested. Saying "below the MOQ
+                    # floor" here would misattribute the cause: the line was
+                    # simply full, regardless of this SKU's MOQ or remainder size.
+                    alloc.assumptions.append(
+                        f"Run 2 remainder {deferred:.1f} could not be placed -- no "
+                        f"weekly capacity remained on this line for this period -- "
+                        f"deferred to reconciliation."
+                    )
 
         leftover_capacity[(plant_line, period)] = {
             "wk1a": rem_wk1a, "wk1": rem["wk1"], "wk2": rem["wk2"],
