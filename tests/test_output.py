@@ -15,14 +15,14 @@ from output import comparison_table_sheet, excel_writer, weekly_plan_sheet
 
 def _sample_engine_result(fallback_applied: bool) -> EngineResult:
     alloc = SkuAllocation(
-        plant_line="PlantA_Line1", period=1, link_code="L1", sku="L1", priority=1.0,
+        plant_line="PlantA_Line1", period=1, link_code="L1", priority=1.0,
         current_fin=100.0, carryover_fin_in=0.0, wk1=100.0,
         plant="PlantA", line="Line1", brand="BrandA", link_desc="Product A",
         month_key="Feb-26", opening_dos=20.0, target_dos=30.0, moq_days=5.0,
     )
     reconciled = ReconciledResult(rows=[alloc])
     difc = DIFCResult(rows=[DIFCRow(plant_line="PlantA_Line1", period=1, link_code="L1",
-                                     sku="L1", closing_by_week={"wk1": 25.0}, approximated=False,
+                                     closing_by_week={"wk1": 25.0}, approximated=False,
                                      plant="PlantA", line="Line1", brand="BrandA",
                                      link_desc="Product A", month_key="Feb-26", opening_dos=20.0)])
     fb = FallbackDecisions(
@@ -45,7 +45,7 @@ def test_workbook_has_all_four_tabs_with_expected_headers():
         weekly_plan = wb["Weekly Plan"]
         headers = [c.value for c in next(weekly_plan.iter_rows(max_row=1))]
         assert "TOTAL PRODUCED" in headers and "CARRYOVER_MPLUS1" in headers
-        assert "SKU" not in headers  # Linkcode-level only, per client decision -- no SKU column anywhere
+        assert "SKU" not in headers  # this version is Link-Code only -- no SKU concept anywhere
 
 
 def test_weekly_plan_has_business_context_columns_matching_sample_format():
@@ -70,7 +70,7 @@ def test_weekly_plan_has_business_context_columns_matching_sample_format():
 
 def test_weekly_plan_notes_column_joins_row_assumptions():
     alloc = SkuAllocation(
-        plant_line="P_L", period=1, link_code="L1", sku="L1", priority=1.0,
+        plant_line="P_L", period=1, link_code="L1", priority=1.0,
         current_fin=100.0, carryover_fin_in=0.0, wk1=100.0,
         assumptions=["Priority defaulted to file order, after every matched Link Code (no Priority(Linkcode Level) match for this row/period)."],
     )
@@ -116,10 +116,10 @@ def test_assumptions_tab_populated_when_fallback_applied():
 
 def test_comparison_table_has_moq_case_column():
     # The spec lists "MOQ compliance flags" for COMPARISON_TABLE; it surfaces as
-    # the per-SKU Run 1 case (A/B/C/D or "No MOQ").
-    a = SkuAllocation(plant_line="P_L1", period=1, link_code="L1", sku="L1", priority=1.0,
+    # the per-Link-Code Run 1 case (A/B/C/D or "No MOQ").
+    a = SkuAllocation(plant_line="P_L1", period=1, link_code="L1", priority=1.0,
                       current_fin=100.0, carryover_fin_in=0.0, wk1=100.0, moq_case="D")
-    b = SkuAllocation(plant_line="P_L1", period=1, link_code="L2", sku="L2", priority=2.0,
+    b = SkuAllocation(plant_line="P_L1", period=1, link_code="L2", priority=2.0,
                       current_fin=50.0, carryover_fin_in=0.0, wk1=50.0, moq_case="No MOQ")
     result = EngineResult(reconciled=ReconciledResult(rows=[a, b]), difc=DIFCResult(rows=[]),
                           fallback=FallbackDecisions(), capacity_messages=[])

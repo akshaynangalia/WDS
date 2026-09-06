@@ -1,6 +1,7 @@
 """
-The core Two-Run allocation heuristic, run per Plant-Line-Period, SKUs
-processed in priority order:
+The core Two-Run allocation heuristic, run per Plant-Line-Period, Link Codes
+processed in priority order (this version of the tool is Link-Code level
+only -- no SKU concept anywhere):
 
     Run 1 (DOS-gap closure), Case A/B/C/D:
         A: FIN < 1.5 x MOQ         -> produce entire FIN, skip Run 2
@@ -12,19 +13,20 @@ processed in priority order:
     spread across remaining weekly capacity, in week order, never producing
     below the MOQ floor per run.
 
-Both runs, for every SKU on a line, are each done as a full pass across all
-SKUs before the next pass starts -- matching the legacy VBA's two-loop
-structure (all SKUs get Run 1 first, updating shared capacity; then all SKUs
-get Run 2). This matters: a low-priority SKU's Run 1 can still be blocked by
-a high-priority SKU's Run 1 exhausting a week's capacity first.
+Both runs, for every Link Code on a line, are each done as a full pass across
+all Link Codes before the next pass starts -- matching the legacy VBA's
+two-loop structure (all Link Codes get Run 1 first, updating shared capacity;
+then all Link Codes get Run 2). This matters: a low-priority Link Code's
+Run 1 can still be blocked by a high-priority Link Code's Run 1 exhausting a
+week's capacity first.
 
 If fallback.use_default_moq is set (MOQ not supplied), Run 1 is skipped
-entirely for every SKU on the affected line and 100% of FIN goes through
-Run 2 -- this is what "MOQ not supplied, run-length constraints not
+entirely for every Link Code on the affected line and 100% of FIN goes
+through Run 2 -- this is what "MOQ not supplied, run-length constraints not
 enforced" (Development Planning Document, Section 5) means concretely. The
-same treatment is applied per-SKU to any single SKU whose MOQ is missing
-(e.g. no Priority(Linkcode Level) match for that row) even when other SKUs on the line do have
-one.
+same treatment is applied per-Link-Code to any single Link Code whose MOQ is
+missing (e.g. no Priority(Linkcode Level) match for that row) even when
+other Link Codes on the line do have one.
 
 Contract:
     consumes: ConsolidatedTable, calendar_df (or None), FallbackDecisions,
@@ -49,7 +51,6 @@ class SkuAllocation:
     plant_line: str
     period: int
     link_code: object
-    sku: object
     priority: float
     current_fin: float
     carryover_fin_in: float
@@ -134,14 +135,14 @@ def run(
                "wk5": caps.wk5 if caps.wk5 is not None else 0.0}
         active_weeks = ["wk1", "wk2", "wk3", "wk4"] + (["wk5"] if caps.wk5 is not None else [])
 
-        skus = group.sort_values("priority").to_dict("records")
+        link_code_rows = group.sort_values("priority").to_dict("records")
 
         allocations: dict[object, SkuAllocation] = {}
-        for r in skus:
+        for r in link_code_rows:
             key = (plant_line, r["link_code"])
             carry_in = carryover_fin_in.get(key, 0.0)
-            allocations[r["sku"]] = SkuAllocation(
-                plant_line=plant_line, period=period, link_code=r["link_code"], sku=r["sku"],
+            allocations[r["link_code"]] = SkuAllocation(
+                plant_line=plant_line, period=period, link_code=r["link_code"],
                 priority=r["priority"], current_fin=r["current_fin"], carryover_fin_in=carry_in,
                 throughput_per_day=r["throughput_per_day"], ge_pct=r["ge_pct"],
                 assumptions=list(r["row_assumptions"]),
@@ -151,8 +152,8 @@ def run(
             )
 
         # --- Carryover (W1A) pass: happens before Run 1, per ground-truth doc ---
-        for r in skus:
-            alloc = allocations[r["sku"]]
+        for r in link_code_rows:
+            alloc = allocations[r["link_code"]]
             if alloc.carryover_fin_in <= 0:
                 continue
             hrs_needed = _hours_needed(alloc.carryover_fin_in, r["throughput_per_day"], r["ge_pct"])
@@ -174,34 +175,35 @@ def run(
                     setattr(alloc, wk, round(getattr(alloc, wk) + produced_wk, 1))
                     rem[wk] = round(rem[wk] - hrs_used_wk, 1)
 
-        # Any W1A capacity no SKU's carryover consumed is freed for the current
-        # month's regular production (ground-truth doc: "If carryover_fin <=
-        # W1A capacity: produce full carryover in W1A; remaining W1A capacity
-        # is freed for current month"). W1A and W1 are the same physical week,
-        # split only by which calendar month the days belong to, so the
-        # leftover hours merge into wk1's shared pool -- available to every
-        # SKU on the line via Run 1/Run 2, not just whichever SKU(s) had
-        # carryover. #18.
+        # Any W1A capacity no Link Code's carryover consumed is freed for the
+        # current month's regular production (ground-truth doc: "If
+        # carryover_fin <= W1A capacity: produce full carryover in W1A;
+        # remaining W1A capacity is freed for current month"). W1A and W1 are
+        # the same physical week, split only by which calendar month the days
+        # belong to, so the leftover hours merge into wk1's shared pool --
+        # available to every Link Code on the line via Run 1/Run 2, not just
+        # whichever Link Code(s) had carryover. #18.
         if rem_wk1a > 0:
             rem["wk1"] = round(rem["wk1"] + rem_wk1a, 1)
             rem_wk1a = 0.0
 
         # --- Run 1: DOS-gap closure (Case A/B/C/D) ---
         run1_qty: dict[object, float] = {}
-        for r in skus:
-            sku = r["sku"]
+        for r in link_code_rows:
+            link_code = r["link_code"]
             moq_days = r["moq_days"]
-            # No MOQ -> no run-length concept for this SKU: skip Run 1, let Run 2
-            # distribute 100% of FIN. Covers both the global fallback and a
-            # per-SKU Priority(Linkcode Level) miss (consolidation.py sets moq_days=None, which
-            # becomes NaN once it's in the frame). Applying the Fallback Matrix's
-            # "MOQ absent -> unbounded, entire FIN through Run 2" rule at SKU
-            # level. `pd.isna` catches None, Python nan and numpy nan alike --
+            # No MOQ -> no run-length concept for this Link Code: skip Run 1,
+            # let Run 2 distribute 100% of FIN. Covers both the global
+            # fallback and a per-Link-Code Priority(Linkcode Level) miss
+            # (consolidation.py sets moq_days=None, which becomes NaN once
+            # it's in the frame). Applying the Fallback Matrix's "MOQ absent
+            # -> unbounded, entire FIN through Run 2" rule at Link-Code level.
+            # `pd.isna` catches None, Python nan and numpy nan alike --
             # without this guard `(moq_days or 0)` lets NaN through (NaN is
             # truthy) and it then floods wk1..wk5, carryover, and rem[wk].
             if fallback.use_default_moq or moq_days is None or pd.isna(moq_days):
-                run1_qty[sku] = 0.0
-                allocations[sku].moq_case = "No MOQ"
+                run1_qty[link_code] = 0.0
+                allocations[link_code].moq_case = "No MOQ"
                 continue
 
             fin = r["current_fin"]
@@ -223,13 +225,13 @@ def run(
             else:
                 qty, case = dos_gap_qty, "D"
 
-            run1_qty[sku] = min(qty, fin)
-            allocations[sku].moq_case = case
+            run1_qty[link_code] = min(qty, fin)
+            allocations[link_code].moq_case = case
 
-        for r in skus:
-            sku = r["sku"]
-            alloc = allocations[sku]
-            qty = run1_qty[sku]
+        for r in link_code_rows:
+            link_code = r["link_code"]
+            alloc = allocations[link_code]
+            qty = run1_qty[link_code]
             produced_total = 0.0
             for wk in active_weeks:
                 if qty - produced_total <= 0:
@@ -242,19 +244,20 @@ def run(
                 produced_total += produced
 
         # --- Run 2: distribute whatever FIN remains ---
-        for r in skus:
-            sku = r["sku"]
-            alloc = allocations[sku]
+        for r in link_code_rows:
+            link_code = r["link_code"]
+            alloc = allocations[link_code]
             remaining_fin = r["current_fin"] - alloc.total_current_month
             if remaining_fin <= 0:
                 continue
 
-            # H1: MOQ is a minimum run length. Run 2 may top up a week this SKU
-            # is already producing in by any amount, but it must not *start* a
-            # fresh run in an otherwise-empty week for less than one MOQ. Any
-            # sliver it therefore can't place is left as an open gap for
-            # reconciliation.py to fold into an existing active week (within real
-            # remaining capacity) or roll to M+1. No MOQ supplied -> no floor.
+            # H1: MOQ is a minimum run length. Run 2 may top up a week this
+            # Link Code is already producing in by any amount, but it must not
+            # *start* a fresh run in an otherwise-empty week for less than one
+            # MOQ. Any sliver it therefore can't place is left as an open gap
+            # for reconciliation.py to fold into an existing active week
+            # (within real remaining capacity) or roll to M+1. No MOQ
+            # supplied -> no floor.
             moq_days = r["moq_days"]
             if fallback.use_default_moq or moq_days is None or pd.isna(moq_days):
                 moq_qty = 0.0
@@ -289,7 +292,8 @@ def run(
                     # Every week was already at zero remaining capacity -- the
                     # MOQ floor was never even tested. Saying "below the MOQ
                     # floor" here would misattribute the cause: the line was
-                    # simply full, regardless of this SKU's MOQ or remainder size.
+                    # simply full, regardless of this Link Code's MOQ or
+                    # remainder size.
                     alloc.assumptions.append(
                         f"Run 2 remainder {deferred:.1f} could not be placed -- no "
                         f"weekly capacity remained on this line for this period -- "

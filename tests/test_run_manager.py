@@ -40,10 +40,10 @@ def _build_mps_input(path: str):
 def _build_mps_output(path: str):
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         pd.DataFrame({
-            "Period": [1], "SKU": [111111], "Brand": ["TestBrand"], "Link Code": [111111],
+            "Period": [1], "Brand": ["TestBrand"], "Link Code": [111111],
             "Link Desc Description": ["Test Product"], "O/S": [10], "DOS": [20],
             "TestPlant_Line1": [300.0],
-        }).to_excel(writer, sheet_name="SKU Line Loading 1", index=False)
+        }).to_excel(writer, sheet_name="Link Code Line Loading 1", index=False)
 
         pd.DataFrame({
             "Link Code": [111111], "Brand": ["TestBrand"], "Link Desc Description": ["Test Product"],

@@ -2,8 +2,10 @@
 Parses the MPS Output workbook.
 
 Sheets read:
-    - SKU Line Loading 1 -> monthly FIN (Line-SKU-Month), wide-format with one
-                            column per Plant_Line combination
+    - Link Code Line Loading 1 -> monthly FIN (Line-LinkCode-Month), wide-format
+                            with one column per Plant_Line combination. This
+                            version of the tool is Link-Code level only -- no
+                            SKU column exists in this sheet, and none is read.
     - Linkcode_DIFC      -> DOS trend per Link Code, one column per period
                             (this is where "Opening DOS" for a given period comes from)
 
@@ -15,7 +17,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-REQUIRED_SHEETS = ("SKU Line Loading 1", "Linkcode_DIFC")
+REQUIRED_SHEETS = ("Link Code Line Loading 1", "Linkcode_DIFC")
 
 
 @dataclass
@@ -37,7 +39,7 @@ def parse(file) -> MPSOutputData:
             return xl.parse(name)
 
         return MPSOutputData(
-            monthly_fin=_read("SKU Line Loading 1"),
+            monthly_fin=_read("Link Code Line Loading 1"),
             linkcode_difc=_read("Linkcode_DIFC"),
             sheets_found=sheets_found,
         )
@@ -51,9 +53,8 @@ def plant_line_columns(monthly_fin: pd.DataFrame) -> list[str]:
     """Columns after the fixed metadata columns are Plant_Line production columns.
     Requires an underscore in the name -- this also correctly excludes duplicate
     columns pandas renames on read (e.g. a repeated "Period" column becomes
-    "Period.1" in the sample file, which is not a Plant_Line column at all)."""
+    "Period.1" if one is ever present, which is not a Plant_Line column at all)."""
     fixed = {
-        "Period", "SKU", "Brand", "Link Code", "Link Desc Description",
-        "List Description", "O/S", "DOS",
+        "Period", "Brand", "Link Code", "Link Desc Description", "O/S", "DOS",
     }
     return [c for c in monthly_fin.columns if c not in fixed and "_" in str(c)]

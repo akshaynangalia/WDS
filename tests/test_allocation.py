@@ -108,18 +108,18 @@ def test_leftover_w1a_capacity_is_freed_for_current_month_production(no_fallback
     assert alloc.wk2 == 0.0    # -- previously: wk1=96.0, wk2=54.0 (capacity stranded)
 
 
-def test_missing_moq_on_one_sku_does_not_poison_its_plan_or_the_line(no_fallback):
-    # A SKU with no Priority(Linkcode Level) match has moq_days=None, which becomes NaN once it's in
-    # the consolidated frame. Before the guard in allocation.run(), `(moq_days
-    # or 0)` let that NaN through Case B and it flooded wk1..wk5, carryover, and
-    # the shared rem[wk] capacity -- the SKU (and often its line-mates) came out
-    # blank. It must instead be planned in full via Run 2 (Fallback Matrix:
-    # "MOQ absent -> unbounded"), and a second SKU sharing the line must be
-    # unaffected.
+def test_missing_moq_on_one_link_code_does_not_poison_its_plan_or_the_line(no_fallback):
+    # A Link Code with no Priority(Linkcode Level) match has moq_days=None,
+    # which becomes NaN once it's in the consolidated frame. Before the guard
+    # in allocation.run(), `(moq_days or 0)` let that NaN through Case B and
+    # it flooded wk1..wk5, carryover, and the shared rem[wk] capacity -- the
+    # Link Code (and often its line-mates) came out blank. It must instead be
+    # planned in full via Run 2 (Fallback Matrix: "MOQ absent -> unbounded"),
+    # and a second Link Code sharing the line must be unaffected.
     rows = [
-        make_row("PlantX_Line1", sku="NOMOQ", link_code="NOMOQ", current_fin=120.0,
+        make_row("PlantX_Line1", link_code="NOMOQ", current_fin=120.0,
                  moq_days=None, opening_dos=20, target_dos=20),          # dos_gap = 0
-        make_row("PlantX_Line1", sku="HASMOQ", link_code="HASMOQ", current_fin=80.0,
+        make_row("PlantX_Line1", link_code="HASMOQ", current_fin=80.0,
                  moq_days=5, opening_dos=20, target_dos=20, priority=2.0),
     ]
     result = allocation.run(make_consolidated(rows), calendar_df=None, fallback=no_fallback)
@@ -129,11 +129,11 @@ def test_missing_moq_on_one_sku_does_not_poison_its_plan_or_the_line(no_fallback
     for alloc in reconciled.rows:
         for wk in ("wk1a", "wk1", "wk2", "wk3", "wk4", "wk5"):
             val = getattr(alloc, wk)
-            assert val == val, f"{alloc.sku}.{wk} is NaN"          # NaN != NaN
+            assert val == val, f"{alloc.link_code}.{wk} is NaN"    # NaN != NaN
         assert alloc.carryover_next == alloc.carryover_next        # not NaN
         assert round(alloc.total_all + alloc.carryover_next, 1) == alloc.current_fin
 
-    nomoq = next(a for a in reconciled.rows if a.sku == "NOMOQ")
+    nomoq = next(a for a in reconciled.rows if a.link_code == "NOMOQ")
     assert round(nomoq.total_all, 1) == 120.0                      # planned in full, nothing lost
 
 
@@ -163,19 +163,19 @@ def test_ge_percent_reduces_effective_weekly_capacity(no_fallback):
 
 
 def test_run2_will_not_open_a_sub_moq_run_in_an_empty_week(no_fallback):
-    # H1: a high-priority No-MOQ SKU consumes Run 2 capacity and leaves only a
-    # sub-MOQ sliver (52 T, vs a 120 T MOQ run length) free in wk4. Run 2 must
-    # NOT drop that sliver into wk4 for the low-priority SKU as a tiny
-    # standalone run -- the SKU keeps only its Run 1 MOQ batch and the
+    # H1: a high-priority No-MOQ Link Code consumes Run 2 capacity and leaves
+    # only a sub-MOQ sliver (52 T, vs a 120 T MOQ run length) free in wk4.
+    # Run 2 must NOT drop that sliver into wk4 for the low-priority Link Code
+    # as a tiny standalone run -- it keeps only its Run 1 MOQ batch and the
     # unplaceable 80 T remainder carries to M+1 (no active week has room).
-    hungry = make_row("Tight_Line1", sku="HUNGRY", link_code="HUNGRY", priority=1.0,
+    hungry = make_row("Tight_Line1", link_code="HUNGRY", priority=1.0,
                       current_fin=500.0, moq_days=None, throughput_per_day=24.0,
                       opening_dos=20, target_dos=20)
-    starved = make_row("Tight_Line1", sku="STARVED", link_code="STARVED", priority=2.0,
+    starved = make_row("Tight_Line1", link_code="STARVED", priority=2.0,
                        current_fin=200.0, moq_days=5, throughput_per_day=24.0,
                        opening_dos=20, target_dos=20)          # Case B -> Run 1 places one 120 T batch
     result = allocation.run(make_consolidated([hungry, starved]), calendar_df=None, fallback=no_fallback)
-    starved_alloc = next(a for a in result.rows if a.sku == "STARVED")
+    starved_alloc = next(a for a in result.rows if a.link_code == "STARVED")
 
     assert round(starved_alloc.wk1, 1) == 120.0                # the Run 1 MOQ batch
     assert starved_alloc.wk4 == 0.0                            # Run 2 did NOT open a sub-MOQ run here
@@ -183,29 +183,30 @@ def test_run2_will_not_open_a_sub_moq_run_in_an_empty_week(no_fallback):
 
     reconciled = reconcile(result)
     assert assert_conservation(reconciled) == []
-    sr = next(a for a in reconciled.rows if a.sku == "STARVED")
+    sr = next(a for a in reconciled.rows if a.link_code == "STARVED")
     assert round(sr.total_all + sr.carryover_next, 1) == 200.0  # nothing lost
     assert round(sr.carryover_next, 1) == 80.0                  # the deferred remainder went to M+1
 
 
 def test_run2_deferral_message_blames_capacity_not_moq_when_line_is_full(no_fallback):
     # Regression: found while tracing a real client run where a 239.5 T
-    # remainder -- more than double that SKU's own MOQ -- was reported as
-    # "below the MOQ run-length floor". The real cause was that every week on
-    # the line was already at ZERO remaining capacity by the time this SKU's
-    # Run 2 turn came up (a high-priority No-MOQ SKU had consumed all of it).
-    # The MOQ floor was never even tested -- blaming it is misleading. This
-    # differs from test_run2_will_not_open_a_sub_moq_run_in_an_empty_week
-    # above, where a real capacity sliver *did* exist and was genuinely too
-    # small for one MOQ run -- that message must still fire unchanged.
-    hungry = make_row("Full_Line1", sku="HUNGRY", link_code="HUNGRY", priority=1.0,
+    # remainder -- more than double that Link Code's own MOQ -- was reported
+    # as "below the MOQ run-length floor". The real cause was that every week
+    # on the line was already at ZERO remaining capacity by the time this
+    # Link Code's Run 2 turn came up (a high-priority No-MOQ Link Code had
+    # consumed all of it). The MOQ floor was never even tested -- blaming it
+    # is misleading. This differs from
+    # test_run2_will_not_open_a_sub_moq_run_in_an_empty_week above, where a
+    # real capacity sliver *did* exist and was genuinely too small for one
+    # MOQ run -- that message must still fire unchanged.
+    hungry = make_row("Full_Line1", link_code="HUNGRY", priority=1.0,
                       current_fin=672.0, moq_days=None, throughput_per_day=24.0,
                       opening_dos=20, target_dos=20)              # No MOQ -> consumes ALL capacity, no sliver
-    starved = make_row("Full_Line1", sku="STARVED", link_code="STARVED", priority=2.0,
+    starved = make_row("Full_Line1", link_code="STARVED", priority=2.0,
                        current_fin=250.0, moq_days=5, throughput_per_day=24.0,
                        opening_dos=20, target_dos=20)             # Case B -> Run 1 places one 120 T batch
     result = allocation.run(make_consolidated([hungry, starved]), calendar_df=None, fallback=no_fallback)
-    starved_alloc = next(a for a in result.rows if a.sku == "STARVED")
+    starved_alloc = next(a for a in result.rows if a.link_code == "STARVED")
 
     assert round(starved_alloc.wk1, 1) == 120.0                  # the Run 1 MOQ batch, placed before HUNGRY's Run 2
     assert not any("below the MOQ run-length floor" in m for m in starved_alloc.assumptions)
@@ -213,7 +214,7 @@ def test_run2_deferral_message_blames_capacity_not_moq_when_line_is_full(no_fall
 
     reconciled = reconcile(result)
     assert assert_conservation(reconciled) == []
-    sr = next(a for a in reconciled.rows if a.sku == "STARVED")
+    sr = next(a for a in reconciled.rows if a.link_code == "STARVED")
     assert round(sr.total_all + sr.carryover_next, 1) == 250.0   # nothing lost
     assert round(sr.carryover_next, 1) == 130.0                  # the deferred remainder went to M+1
 
@@ -223,15 +224,15 @@ def test_case_d_run1_uses_daily_demand_not_throughput(no_fallback):
     # that burns down days of cover -- NOT the line's production rate. Here the
     # gap is 10 days and demand 8 T/day, so Run 1 should claim 80 T, not
     # 10 x 40 = 400 T. A priority-1 No-MOQ filler soaks every bit of Run 2
-    # capacity, so the Case D SKU's total == exactly what Run 1 gave it.
-    filler = make_row("Tight_Line1", sku="FILL", link_code="FILL", priority=1.0,
+    # capacity, so the Case D Link Code's total == exactly what Run 1 gave it.
+    filler = make_row("Tight_Line1", link_code="FILL", priority=1.0,
                       moq_days=None, throughput_per_day=40.0, current_fin=5000.0,
                       opening_dos=20, target_dos=20)
-    sku_d = make_row("Tight_Line1", sku="D", link_code="D", priority=2.0,
+    link_code_d = make_row("Tight_Line1", link_code="D", priority=2.0,
                      moq_days=2, throughput_per_day=40.0, daily_demand=8.0,
                      current_fin=250.0, opening_dos=10.0, target_dos=20.0)  # dos_gap = 10 days
-    result = allocation.run(make_consolidated([filler, sku_d]), calendar_df=None, fallback=no_fallback)
-    d = next(a for a in result.rows if a.sku == "D")
+    result = allocation.run(make_consolidated([filler, link_code_d]), calendar_df=None, fallback=no_fallback)
+    d = next(a for a in result.rows if a.link_code == "D")
 
     assert d.moq_case == "D"
     assert round(d.wk1, 1) == 80.0                       # 10 days x 8 T/day
@@ -239,38 +240,38 @@ def test_case_d_run1_uses_daily_demand_not_throughput(no_fallback):
 
     reconciled = reconcile(result)
     assert assert_conservation(reconciled) == []
-    dr = next(a for a in reconciled.rows if a.sku == "D")
+    dr = next(a for a in reconciled.rows if a.link_code == "D")
     assert round(dr.carryover_next, 1) == 170.0          # 250 FIN - 80 produced, carried to M+1
 
 
-def test_shrunk_dos_gap_moves_a_sku_from_case_d_to_case_c(no_fallback):
-    # #14 side effect: once the gap is sized by demand, a SKU whose gap tonnage
-    # falls below one MOQ batch is Case C (make one MOQ batch), where the
-    # throughput-inflated gap had wrongly put it in Case D.
+def test_shrunk_dos_gap_moves_a_link_code_from_case_d_to_case_c(no_fallback):
+    # #14 side effect: once the gap is sized by demand, a Link Code whose gap
+    # tonnage falls below one MOQ batch is Case C (make one MOQ batch), where
+    # the throughput-inflated gap had wrongly put it in Case D.
     #   gap 3 days x 9 T/day  = 27 T  <  MOQ batch (2 x 40) = 80 T  -> Case C
     #   (buggy: 3 x 40 = 120 T  >= 80 T  -> Case D)
-    sku = make_row("L_Line1", moq_days=2, throughput_per_day=40.0, daily_demand=9.0,
+    row = make_row("L_Line1", moq_days=2, throughput_per_day=40.0, daily_demand=9.0,
                    current_fin=500.0, opening_dos=17.0, target_dos=20.0)  # dos_gap = 3 days
-    result = allocation.run(make_consolidated([sku]), calendar_df=None, fallback=no_fallback)
+    result = allocation.run(make_consolidated([row]), calendar_df=None, fallback=no_fallback)
     assert result.rows[0].moq_case == "C"
 
 
-def test_run_records_the_moq_case_per_sku(no_fallback):
-    # COMPARISON_TABLE's "MOQ Case" column: allocation.run() must tag every SKU
-    # with the Run 1 branch that applied (A/B/C/D or "No MOQ").
+def test_run_records_the_moq_case_per_link_code(no_fallback):
+    # COMPARISON_TABLE's "MOQ Case" column: allocation.run() must tag every
+    # Link Code with the Run 1 branch that applied (A/B/C/D or "No MOQ").
     rows = [
-        make_row("PlantA_Line1", sku="A", link_code="A", current_fin=300.0, moq_days=10,
+        make_row("PlantA_Line1", link_code="A", current_fin=300.0, moq_days=10,
                  opening_dos=20, target_dos=20),                             # A: FIN < 1.5 x MOQ
-        make_row("PlantB_Line1", sku="B", link_code="B", current_fin=500.0, moq_days=5,
+        make_row("PlantB_Line1", link_code="B", current_fin=500.0, moq_days=5,
                  opening_dos=20, target_dos=20),                             # B: dos_gap == 0
-        make_row("PlantC_Line1", sku="C", link_code="C", current_fin=500.0, moq_days=5,
+        make_row("PlantC_Line1", link_code="C", current_fin=500.0, moq_days=5,
                  opening_dos=18, target_dos=20),                             # C: 0 < gap < MOQ
-        make_row("PlantD_Line1", sku="D", link_code="D", current_fin=500.0, moq_days=5,
+        make_row("PlantD_Line1", link_code="D", current_fin=500.0, moq_days=5,
                  opening_dos=10, target_dos=20),                             # D: gap >= MOQ
-        make_row("PlantN_Line1", sku="N", link_code="N", current_fin=200.0, moq_days=None,
-                 opening_dos=20, target_dos=20),                             # no MOQ for this SKU
+        make_row("PlantN_Line1", link_code="N", current_fin=200.0, moq_days=None,
+                 opening_dos=20, target_dos=20),                             # no MOQ for this Link Code
     ]
     result = allocation.run(make_consolidated(rows), calendar_df=None, fallback=no_fallback)
-    assert {a.sku: a.moq_case for a in result.rows} == {
+    assert {a.link_code: a.moq_case for a in result.rows} == {
         "A": "A", "B": "B", "C": "C", "D": "D", "N": "No MOQ",
     }

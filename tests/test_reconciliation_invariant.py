@@ -25,7 +25,7 @@ def test_reconciliation_holds_across_generated_combinations():
         i += 1
         rows.append(make_row(
             f"GenPlant_Line{i % 3}",  # spread across a few lines so capacity contention varies
-            sku=f"SKU{i}", link_code=f"SKU{i}",
+            link_code=f"LC{i}",
             current_fin=float(fin), moq_days=moq_days,
             opening_dos=10.0, target_dos=10.0 + gap,
             priority=float(priority), throughput_per_day=20.0,
@@ -72,7 +72,7 @@ def test_rounding_residual_still_absorbs_into_active_bucket_within_capacity():
     from engine.allocation import AllocationResult, SkuAllocation
 
     alloc = SkuAllocation(
-        plant_line="P_L", period=1, link_code="L1", sku="L1", priority=1.0,
+        plant_line="P_L", period=1, link_code="L1", priority=1.0,
         current_fin=100.0, carryover_fin_in=0.0,
         throughput_per_day=24.0, ge_pct=1.0,
     )
@@ -89,33 +89,33 @@ def test_rounding_residual_still_absorbs_into_active_bucket_within_capacity():
     assert assert_conservation(reconciled) == []
 
 
-def test_sku_with_zero_capacity_left_carries_entire_fin_forward():
-    """A low-priority SKU sharing a line with a high-priority SKU that
-    consumes all available capacity should get zero allocation -- and its
-    entire FIN should roll to CARRYOVER_MPLUS1, not vanish."""
-    hungry = make_row("Shared_Line1", sku="HUNGRY", link_code="HUNGRY", priority=1.0,
+def test_link_code_with_zero_capacity_left_carries_entire_fin_forward():
+    """A low-priority Link Code sharing a line with a high-priority Link Code
+    that consumes all available capacity should get zero allocation -- and
+    its entire FIN should roll to CARRYOVER_MPLUS1, not vanish."""
+    hungry = make_row("Shared_Line1", link_code="HUNGRY", priority=1.0,
                        current_fin=10000.0, moq_days=None, throughput_per_day=20.0,
                        opening_dos=10, target_dos=10)
-    starved = make_row("Shared_Line1", sku="STARVED", link_code="STARVED", priority=2.0,
+    starved = make_row("Shared_Line1", link_code="STARVED", priority=2.0,
                         current_fin=200.0, moq_days=None, throughput_per_day=20.0,
                         opening_dos=10, target_dos=10)
     table = make_consolidated([hungry, starved])
     result = allocation.run(table, calendar_df=None, fallback=FallbackDecisions())
     reconciled = reconcile(result)
-    starved_alloc = next(a for a in reconciled.rows if a.sku == "STARVED")
+    starved_alloc = next(a for a in reconciled.rows if a.link_code == "STARVED")
     assert starved_alloc.total_all == 0.0
     assert starved_alloc.carryover_next == 200.0
     assert assert_conservation(reconciled) == []
 
 
 def test_reconciliation_with_carryover_in_and_out_across_two_periods():
-    """A SKU whose entire FIN was carried forward from a starved period 1
+    """A Link Code whose entire FIN was carried forward from a starved period 1
     should have that exact amount show up as carryover_fin_in in period 2 --
     and the two periods together must still conserve exactly."""
-    hungry = make_row("Tight2_Line1", period=1, sku="HUNGRY", link_code="HUNGRY", priority=1.0,
+    hungry = make_row("Tight2_Line1", period=1, link_code="HUNGRY", priority=1.0,
                        current_fin=10000.0, moq_days=None, throughput_per_day=20.0,
                        opening_dos=10, target_dos=10)
-    starved = make_row("Tight2_Line1", period=1, sku="STARVED", link_code="STARVED", priority=2.0,
+    starved = make_row("Tight2_Line1", period=1, link_code="STARVED", priority=2.0,
                         current_fin=200.0, moq_days=None, throughput_per_day=20.0,
                         opening_dos=10, target_dos=10)
     table_p1 = make_consolidated([hungry, starved])
@@ -127,7 +127,7 @@ def test_reconciliation_with_carryover_in_and_out_across_two_periods():
     carry = extract_carryover(reconciled_p1)
     assert carry[("Tight2_Line1", "STARVED")] == 200.0
 
-    row_p2 = make_row("Tight2_Line1", period=2, sku="STARVED", link_code="STARVED",
+    row_p2 = make_row("Tight2_Line1", period=2, link_code="STARVED",
                        current_fin=500.0, moq_days=5, opening_dos=10, target_dos=10,
                        throughput_per_day=20.0)
     table_p2 = make_consolidated([row_p2])
