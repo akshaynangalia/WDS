@@ -188,6 +188,36 @@ def test_run2_will_not_open_a_sub_moq_run_in_an_empty_week(no_fallback):
     assert round(sr.carryover_next, 1) == 80.0                  # the deferred remainder went to M+1
 
 
+def test_run2_deferral_message_blames_capacity_not_moq_when_line_is_full(no_fallback):
+    # Regression: found while tracing a real client run where a 239.5 T
+    # remainder -- more than double that SKU's own MOQ -- was reported as
+    # "below the MOQ run-length floor". The real cause was that every week on
+    # the line was already at ZERO remaining capacity by the time this SKU's
+    # Run 2 turn came up (a high-priority No-MOQ SKU had consumed all of it).
+    # The MOQ floor was never even tested -- blaming it is misleading. This
+    # differs from test_run2_will_not_open_a_sub_moq_run_in_an_empty_week
+    # above, where a real capacity sliver *did* exist and was genuinely too
+    # small for one MOQ run -- that message must still fire unchanged.
+    hungry = make_row("Full_Line1", sku="HUNGRY", link_code="HUNGRY", priority=1.0,
+                      current_fin=672.0, moq_days=None, throughput_per_day=24.0,
+                      opening_dos=20, target_dos=20)              # No MOQ -> consumes ALL capacity, no sliver
+    starved = make_row("Full_Line1", sku="STARVED", link_code="STARVED", priority=2.0,
+                       current_fin=250.0, moq_days=5, throughput_per_day=24.0,
+                       opening_dos=20, target_dos=20)             # Case B -> Run 1 places one 120 T batch
+    result = allocation.run(make_consolidated([hungry, starved]), calendar_df=None, fallback=no_fallback)
+    starved_alloc = next(a for a in result.rows if a.sku == "STARVED")
+
+    assert round(starved_alloc.wk1, 1) == 120.0                  # the Run 1 MOQ batch, placed before HUNGRY's Run 2
+    assert not any("below the MOQ run-length floor" in m for m in starved_alloc.assumptions)
+    assert any("no weekly capacity remained on this line" in m for m in starved_alloc.assumptions)
+
+    reconciled = reconcile(result)
+    assert assert_conservation(reconciled) == []
+    sr = next(a for a in reconciled.rows if a.sku == "STARVED")
+    assert round(sr.total_all + sr.carryover_next, 1) == 250.0   # nothing lost
+    assert round(sr.carryover_next, 1) == 130.0                  # the deferred remainder went to M+1
+
+
 def test_case_d_run1_uses_daily_demand_not_throughput(no_fallback):
     # #14: Case D's Run 1 target is (DOS gap days x DAILY DEMAND) -- the rate
     # that burns down days of cover -- NOT the line's production rate. Here the
