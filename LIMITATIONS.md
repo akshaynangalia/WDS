@@ -85,7 +85,7 @@ Matrix. To be revisited together with that item.
 
 ---
 
-## L3 — REQ-CR-03 (MOQ as Maximum Run-Length) is not implemented; MOQ is currently a *minimum* floor, and the ground-truth doc contradicts itself on which it should be
+## L3 — REQ-CR-03: sub-item 3 (split into two runs) is implemented as a Run-1-half quantity split; "what a run is physically" and the min-vs-max wording remain open
 
 **What it is.** BRD v2.0 / REQ-CR-03 (sub-items 3 & 5 only; sub-items 1–2 excluded
 by client scope decision) redefines MOQ from a minimum batch size into a
@@ -95,66 +95,53 @@ by client scope decision) redefines MOQ from a minimum batch size into a
 > into two approximately equal runs. The DOS hard constraint always overrides
 > the split."*
 
-**The ground-truth flow doc contradicts this in its own Run 2 rules**, which still
-say *"No production run may fall below moq_hrs (the MOQ floor in hours)"* — i.e.
-MOQ as a **minimum**, the opposite of REQ-CR-03. `engine/allocation.py` currently
-implements the *minimum-floor* reading (Case B/C produce "one MOQ batch"; Run 2's
-`H1` rule never starts a run below the MOQ floor) — i.e. today's code matches the
-older, pre-CR-03 language, not REQ-CR-03 itself.
+**What the tool does now (`feature/cr03-split-case-b`).** Sub-item 3 is
+implemented for the one case it applies to:
 
-**Two things need resolving before this can be built, not just one:**
+- **Case B** (DOS gap = 0, no urgency) with `FIN ≥ 1.5 × MOQ` → Run 1's target
+  is **`FIN / 2`** (was: one MOQ batch); Run 2's existing remainder pass
+  produces the other ≈ half. In practice this is *every* Case-B Link Code that
+  has a real MOQ, because Case A already claims everything with
+  `FIN < 1.5 × MOQ`. The `CASE` column still reads `"B"`.
+- **Case A** is already a single run — unchanged, and it *is* sub-item 3's
+  "schedule as a single run" branch.
+- **Cases C and D** are DOS-gap-driven, so **sub-item 5** ("DOS hard constraint
+  always overrides the split") is honoured by leaving them untouched.
+- **Missing-MOQ Link Codes** (see L2 above) are unchanged — still 100 % via
+  Run 2, no split.
 
-1. **What does "a run" mean physically?** MOQ's own unit is *days* (confirmed
-   from the legacy VBA: `moq_hrs = MOQ_value * 24`, and from the RCCP sample
-   values themselves — 1, 1.5, 2, 3, 3.5 — which read as day-counts, not
-   tonnage). A "run" is most plausibly a continuous production campaign/batch
-   (standard manufacturing usage — the reason to cap a "run-length" at all is to
-   stop one SKU monopolizing a line indefinitely), not a calendar week. Note this
-   is a *different* use of the word "run" than the engine's own "Two-Run"
-   terminology (Run 1 / Run 2 = the two allocation *passes* — already settled,
-   unrelated question).
-2. **Does "split into two approximately equal runs" mean only a quantity split**
-   (each run's *size* halved, still placed by today's greedy per-week fill, same
-   Run-1-then-Run-2 pass structure), **or does it also require leaving scheduling
-   room between the two runs** for other SKUs' production on the same line
-   (the actual manufacturing reason a run-length cap exists)? The second reading
-   is a real scheduling/sequencing change, not a quantity tweak.
+Measured on the full real dataset (10 periods, 942 rows): 258 rows (all Case B)
+move from a one-MOQ-batch Run 1 to a `FIN/2` Run 1. Aggregate volume unchanged,
+`gap_vs_fin` stays 0 — it is a **redistribution between Link Codes sharing a
+line**: Run 1 is a full pass over every Link Code before Run 2 starts, so a
+bigger Run 1 claim locks in more of the shared, priority-ordered capacity
+during that pass.
 
-**This is not a cosmetic choice — tested it empirically.** Implementing only the
-narrowest reading (quantity split — Case B's Run 1 target becomes `FIN / 2`
-instead of one MOQ batch, when `FIN ≥ 1.5 × MOQ`; Cases C/D unchanged per the DOS
-override) against the full real dataset (periods 1–6) changed:
+**What is deliberately NOT changed — the residual limitation:**
 
-- **135 of 568 rows** (24%) — individual SKU-period swings up to **+140.9 T** and
-  **−126.3 T** on a single row.
-- Aggregate total produced barely moved (+94.5 T net, ~0.17% of total FIN) —
-  confirming this is almost entirely a **redistribution between SKUs sharing a
-  line**, not a change in total capacity used. `gap_vs_fin` stayed 0 throughout
-  (no volume lost).
+1. **This is the *quantity-split* reading.** "Two runs" = Run 1 takes half,
+   Run 2 the rest; both halves are still placed by the same greedy per-week
+   fill, in the same two-pass structure. No distinct schedulable "run /
+   campaign" object is introduced, and **no scheduling gap is reserved between
+   the two runs** for other Link Codes on the line. If the client means a real
+   sequencing change (the usual manufacturing reason to cap a run length), this
+   needs redoing — the current change would be the quantity layer of it, not
+   the whole thing.
+2. **MOQ is still also a *minimum floor* elsewhere in the engine.** Run 2's
+   `H1` rule still won't *start* a sub-MOQ run in an empty week, and Case C
+   still produces "one full MOQ (floor)". The flow doc's Run 2 rule ("no
+   production run may fall below `moq_hrs`", a **minimum**) and CR-03's
+   "Maximum Run-Length" label still coexist unreconciled. It doesn't make this
+   change ambiguous — the split only sizes Run 1's claim — but the field-label
+   contradiction stands.
 
-The mechanism: Run 1 completes for *every* SKU on a line (in priority order)
-before Run 2 starts for *any* SKU (matches the legacy VBA's own two-loop
-structure exactly, confirmed line-by-line). Growing a Case-B SKU's Run 1 claim
-from a small MOQ batch to up to half its FIN lets it lock in materially more of
-the shared, priority-ordered capacity *during the Run 1 pass* — at the direct
-expense of other SKUs on the same line, purely as a side effect of which pass
-gets the bigger claim. A client reviewing this needs to see that trade-off, not
-just the requirement text.
+**Open questions still worth putting to the client (Amit/Vijay):**
 
-**Open questions for the client (Amit/Vijay):**
-
-1. Is REQ-CR-03 (v2.0, "Maximum Run-Length") meant to fully replace the older
-   "MOQ floor" language still present in the flow doc's Run 2 rules (v1),
-   or should both coexist somehow?
-2. Does "two approximately equal runs" mean a quantity split only, or does it
-   require the schedule to leave a gap for other SKUs between the two runs?
-3. Does the DOS-override in sub-item 5 apply only when a SKU has a real DOS gap
-   (Cases C/D), leaving Case B as the only case the split rule actually changes —
-   or was something broader intended?
-
-Nothing has been built against a guessed answer to any of these — `moq_case`
-"B"/"C"/"D" and the MOQ-as-floor behavior in `allocation.py`/Run 2's `H1` rule
-are unchanged pending a client answer.
+1. Does REQ-CR-03's "Maximum Run-Length" fully replace the older "MOQ floor"
+   language in the flow doc's Run 2 rules, or should both coexist?
+2. Does "two approximately equal runs" mean the quantity split now shipped, or
+   does it also require the schedule to leave a gap for other Link Codes
+   between the two runs?
 
 ---
 
