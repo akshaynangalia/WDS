@@ -27,7 +27,7 @@ def style_header_row(ws: Worksheet, ncols: int) -> None:
 def style_period_banded_header(
     ws: Worksheet, header_row1: list[str], header_row2: list[str], n_id_cols: int
 ) -> None:
-    """Two-row banded header for the Weekly Plan Transposed sheet: row 1 carries
+    """Two-row banded header for the Weekly Plan sheet: row 1 carries
     the month band (merged across each period block), row 2 the week labels. The
     id columns (first ``n_id_cols``) are merged vertically across both rows.
     """

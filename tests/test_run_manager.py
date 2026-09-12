@@ -67,10 +67,10 @@ def test_full_pipeline_headless_produces_valid_workbook():
         assert any("Calendar not supplied" in m for m in result.assumption_messages)
 
         wb = openpyxl.load_workbook(result.output_path)
-        transposed = wb["Weekly Plan Transposed"]
-        headers_row2 = [c.value for c in next(transposed.iter_rows(min_row=2, max_row=2))]
+        weekly_plan = wb["Weekly Plan"]
+        headers_row2 = [c.value for c in next(weekly_plan.iter_rows(min_row=2, max_row=2))]
         total_col = headers_row2.index("Total Produced") + 1
-        total_value = transposed.cell(row=3, column=total_col).value
+        total_value = weekly_plan.cell(row=3, column=total_col).value
         assert round(total_value, 1) == 300.0  # must equal FIN -- the whole point of reconciliation
 
 
