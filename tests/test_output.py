@@ -11,12 +11,7 @@ from engine.dos_difc import DIFCResult, DIFCRow
 from engine.engine_result import EngineResult
 from engine.fallback import FallbackDecisions
 from engine.reconciliation import ReconciledResult
-from output import (
-    comparison_table_sheet,
-    excel_writer,
-    weekly_plan_sheet,
-    weekly_plan_transposed_sheet,
-)
+from output import comparison_table_sheet, excel_writer, weekly_plan_transposed_sheet
 
 
 def _sample_engine_result(fallback_applied: bool) -> EngineResult:
@@ -38,53 +33,21 @@ def _sample_engine_result(fallback_applied: bool) -> EngineResult:
     return EngineResult(reconciled=reconciled, difc=difc, fallback=fb, capacity_messages=[])
 
 
-def test_workbook_has_all_five_tabs_with_expected_headers():
+def test_workbook_has_all_four_tabs_with_expected_headers():
     result = _sample_engine_result(fallback_applied=False)
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "out.xlsx")
         excel_writer.write(result, path)
         wb = openpyxl.load_workbook(path)
         assert set(wb.sheetnames) == {
-            "Weekly Plan", "Weekly Plan Transposed", "Comparison Table",
+            "Weekly Plan Transposed", "Comparison Table",
             "Weekly DIFC Summary", "Assumption Applied",
         }
 
-        weekly_plan = wb["Weekly Plan"]
-        headers = [c.value for c in next(weekly_plan.iter_rows(max_row=1))]
-        assert "TOTAL PRODUCED" in headers and "CARRYOVER_MPLUS1" in headers
-        assert "SKU" not in headers  # this version is Link-Code only -- no SKU concept anywhere
-
-
-def test_weekly_plan_has_business_context_columns_matching_sample_format():
-    result = _sample_engine_result(fallback_applied=False)
-    df = weekly_plan_sheet.build_dataframe(result)
-    for col in (
-        "Plant", "Line", "Linkcode", "Brand", "Link Desc Description", "Month", "Period",
-        "Opening DOS", "Target DOS", "Priority", "MOQ", "Notes",
-    ):
-        assert col in df.columns
-    row = df.iloc[0]
-    assert row["Plant"] == "PlantA"
-    assert row["Line"] == "Line1"
-    assert row["Linkcode"] == "L1"
-    assert row["Brand"] == "BrandA"
-    assert row["Link Desc Description"] == "Product A"
-    assert row["Month"] == "Feb-26"
-    assert row["Opening DOS"] == 20.0
-    assert row["Target DOS"] == 30.0
-    assert row["MOQ"] == 5.0
-
-
-def test_weekly_plan_notes_column_joins_row_assumptions():
-    alloc = SkuAllocation(
-        plant_line="P_L", period=1, link_code="L1", priority=1.0,
-        current_fin=100.0, carryover_fin_in=0.0, wk1=100.0,
-        assumptions=["Priority defaulted to file order, after every matched Link Code (no Priority(Linkcode Level) match for this row/period)."],
-    )
-    result = EngineResult(reconciled=ReconciledResult(rows=[alloc]), difc=DIFCResult(rows=[]),
-                          fallback=FallbackDecisions(), capacity_messages=[])
-    df = weekly_plan_sheet.build_dataframe(result)
-    assert df.iloc[0]["Notes"] == "Priority defaulted to file order, after every matched Link Code (no Priority(Linkcode Level) match for this row/period)."
+        transposed = wb["Weekly Plan Transposed"]
+        headers_row2 = [c.value for c in next(transposed.iter_rows(min_row=2, max_row=2))]
+        assert "Total Produced" in headers_row2 and "Carryover M+1" in headers_row2
+        assert "SKU" not in headers_row2  # this version is Link-Code only -- no SKU concept anywhere
 
 
 def test_header_row_is_styled_purple_with_white_bold_text():
@@ -93,7 +56,7 @@ def test_header_row_is_styled_purple_with_white_bold_text():
         path = os.path.join(tmp, "out.xlsx")
         excel_writer.write(result, path)
         wb = openpyxl.load_workbook(path)
-        for sheet_name in ("Weekly Plan", "Comparison Table", "Weekly DIFC Summary", "Assumption Applied"):
+        for sheet_name in ("Comparison Table", "Weekly DIFC Summary", "Assumption Applied"):
             cell = wb[sheet_name]["A1"]
             assert cell.fill.fgColor.rgb == "FF4F2170"
             assert cell.font.bold is True
@@ -143,18 +106,15 @@ def _transposed_result(rows):
                         fallback=FallbackDecisions(), capacity_messages=[])
 
 
-def test_transposed_w1_column_folds_w1a_into_w1_but_keeps_it_split_on_weekly_plan():
+def test_transposed_w1_column_folds_w1a_into_w1():
     alloc = _transposed_alloc(1, "Feb-26", "L1", wk1a=15.0, wk1=20.0, wk2=65.0)  # total_all == 100
     result = _transposed_result([alloc])
 
     df, _, _ = weekly_plan_transposed_sheet.build(result)
     row = df.iloc[0]
-    assert row["Feb-26 | W1 (=W1A+W1)"] == 35.0          # wk1a + wk1
+    assert row["Feb-26 | W1 (=W1A+W1)"] == alloc.wk1a + alloc.wk1 == 35.0
     assert row["Feb-26 | W2"] == 65.0
     assert row["Feb-26 | Total Produced"] == 100.0        # unchanged -- still reconciles to FIN
-
-    main = weekly_plan_sheet.build_dataframe(result).iloc[0]
-    assert main["W1A"] == 15.0 and main["W1"] == 20.0     # main sheet keeps them separate
 
 
 def test_transposed_w5_block_appears_only_for_five_week_months():

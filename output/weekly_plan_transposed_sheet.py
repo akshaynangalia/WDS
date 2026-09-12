@@ -1,14 +1,15 @@
-"""Weekly Plan Transposed tab -- the same numbers as the Weekly Plan tab,
-pivoted to the client's sample layout: one row per (Plant, Line, Linkcode),
-with planning periods spread ACROSS the sheet as repeating column blocks
-instead of down it as repeated rows.
+"""Weekly Plan Transposed tab -- the tool's only weekly-plan output, in the
+client's sample layout: one row per (Plant, Line, Linkcode), with planning
+periods spread ACROSS the sheet as repeating column blocks instead of down it
+as repeated rows. (An earlier, untransposed "Weekly Plan" tab -- one row per
+period -- has been removed; this tab replaces it, not supplements it.)
 
 Per-period block: W1, W2, W3, W4, [W5], Carryover M+1, Total Produced.
     - W1 here is W1A + W1 (the whole first calendar week, including the days
-      that fall in the previous month). The Weekly Plan tab keeps W1A broken
-      out on its own; this tab folds it in to match the client sample, which
-      has no W1A column. Total Produced is unchanged, so every row still
-      reconciles to FIN.
+      that fall in the previous month). W1A has no column of its own on this
+      sheet -- folded into W1 to match the client sample, which has no W1A
+      column either. Stated in the column header and in NOTE below. Total
+      Produced is unchanged, so every row still reconciles to FIN.
     - W5 appears only for a five-week month (calendar month in Mar/Jun/Sep/Dec,
       i.e. month MOD 3 == 0) -- the same rule the engine uses to decide whether
       a W5 bucket exists at all. Those period blocks are one column wider.
@@ -38,8 +39,7 @@ _TAIL_LABELS = ["Carryover M+1", "Total Produced"]
 
 NOTE = (
     'Note: W1 = W1A + W1 -- the first calendar week, including the days that '
-    'fall in the previous month (prior-month carryover is produced on those '
-    'days). The "Weekly Plan" sheet keeps W1A broken out as its own column.'
+    'fall in the previous month (prior-month carryover is produced on those days).'
 )
 
 
