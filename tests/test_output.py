@@ -11,7 +11,7 @@ from engine.dos_difc import DIFCResult, DIFCRow
 from engine.engine_result import EngineResult
 from engine.fallback import FallbackDecisions
 from engine.reconciliation import ReconciledResult
-from output import comparison_table_sheet, excel_writer, weekly_plan_sheet
+from output import comparison_table_sheet, difc_summary_sheet, excel_writer, weekly_plan_sheet
 
 
 def _sample_engine_result(fallback_applied: bool) -> EngineResult:
@@ -201,15 +201,58 @@ def test_weekly_plan_sheet_has_two_row_banded_header_and_the_w1_note():
         assert note is not None
 
 
-def test_comparison_table_has_moq_case_column():
-    # The spec lists "MOQ compliance flags" for COMPARISON_TABLE; it surfaces as
-    # the per-Link-Code Run 1 case (A/B/C/D or "No MOQ").
-    a = SkuAllocation(plant_line="P_L1", period=1, link_code="L1", priority=1.0,
-                      current_fin=100.0, carryover_fin_in=0.0, wk1=100.0, moq_case="D")
-    b = SkuAllocation(plant_line="P_L1", period=1, link_code="L2", priority=2.0,
-                      current_fin=50.0, carryover_fin_in=0.0, wk1=50.0, moq_case="No MOQ")
-    result = EngineResult(reconciled=ReconciledResult(rows=[a, b]), difc=DIFCResult(rows=[]),
+def test_comparison_table_case_and_gap_vs_fin_repeat_per_period():
+    # CASE genuinely changes period to period as a Link Code's DOS gap
+    # changes -- unlike Weekly Plan (which deliberately omits CASE since this
+    # is its home sheet), it must repeat here, not sit static.
+    rows = [
+        SkuAllocation(plant_line="P_L1", period=1, link_code="L1", priority=1.0,
+                      current_fin=100.0, carryover_fin_in=0.0, wk1=100.0, moq_case="D",
+                      plant="P", line="L1", brand="B", link_desc="D", month_key="Jan-26"),
+        SkuAllocation(plant_line="P_L1", period=2, link_code="L1", priority=1.0,
+                      current_fin=50.0, carryover_fin_in=0.0, wk1=50.0, moq_case="B",
+                      plant="P", line="L1", brand="B", link_desc="D", month_key="Feb-26"),
+    ]
+    result = EngineResult(reconciled=ReconciledResult(rows=rows), difc=DIFCResult(rows=[]),
                           fallback=FallbackDecisions(), capacity_messages=[])
-    df = comparison_table_sheet.build_dataframe(result)
-    assert "CASE" in df.columns
-    assert df.set_index("Linkcode")["CASE"].to_dict() == {"L1": "D", "L2": "No MOQ"}
+    df, _, _ = comparison_table_sheet.build(result)
+    row = df.iloc[0]
+
+    assert row["Jan-26 | CASE"] == "D" and row["Feb-26 | CASE"] == "B"
+    # gap_vs_fin also repeats -- even though it's 0 in both periods here, it
+    # exists to flag the one period reconciliation doesn't hold, so it must
+    # never be collapsed to a single static value.
+    assert row["Jan-26 | gap_vs_fin"] == 0.0 and row["Feb-26 | gap_vs_fin"] == 0.0
+    assert not any(label in ("CASE", "gap_vs_fin") for label, _ in comparison_table_sheet.STATIC_FIELDS)
+
+
+def _difc_row(period, month_key, link_code, *, closing_by_week=None, approximated=False, opening_dos=0.0):
+    return DIFCRow(
+        plant_line="P_L1", period=period, link_code=link_code,
+        closing_by_week=closing_by_week or {}, approximated=approximated,
+        plant="P", line="L1", brand="B", link_desc="D", month_key=month_key, opening_dos=opening_dos,
+    )
+
+
+def test_difc_summary_approximated_is_static_and_wk5_only_where_data_exists():
+    rows = [
+        _difc_row(1, "Jun-26", "L1", closing_by_week={"wk1": 10.0, "wk5": 5.0}, approximated=True, opening_dos=20.0),
+        _difc_row(1, "Jun-26", "L2", closing_by_week={"wk1": 8.0}, approximated=True, opening_dos=15.0),  # no wk5 this period
+        _difc_row(2, "Jul-26", "L1", closing_by_week={"wk1": 12.0}, approximated=True, opening_dos=22.0),
+    ]
+    result = EngineResult(reconciled=ReconciledResult(rows=[]), difc=DIFCResult(rows=rows),
+                          fallback=FallbackDecisions(), capacity_messages=[])
+    df, header_row1, _ = difc_summary_sheet.build(result)
+
+    # Approximated: one static column, not repeated per period.
+    assert header_row1.count("Approximated (monthly avg)") == 1
+    assert df.set_index("Linkcode").loc["L1", "Approximated (monthly avg)"] == "Yes"
+
+    # WK5 exists for the Jun-26 block because L1 has a wk5 value that period --
+    # even though L2, in the very same period, has none and shows blank there.
+    # It's a data-driven decision, not "month MOD 3 == 0" alone.
+    assert "Jun-26 | WK5" in df.columns
+    assert "Jul-26 | WK5" not in df.columns  # no row has a wk5 value that period
+    by_lc = df.set_index("Linkcode")
+    assert by_lc.loc["L1", "Jun-26 | WK5"] == 5.0
+    assert pd.isna(by_lc.loc["L2", "Jun-26 | WK5"])  # same period, no wk5 key for this row
