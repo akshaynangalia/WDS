@@ -55,7 +55,7 @@ def make_layout():
                             make_upload_card("upload-mps-output", "checklist-mps-output",
                                               "MPS Output", MPS_OUTPUT_SHEETS),
                             make_upload_card("upload-manual-input", "checklist-manual-input",
-                                              "Manual Input", MANUAL_INPUT_SHEETS, optional=True),
+                                              "Manual Input", MANUAL_INPUT_SHEETS),
                         ],
                     ),
                     make_fallback_banner(),
