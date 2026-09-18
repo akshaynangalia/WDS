@@ -1,7 +1,12 @@
 """
 Reconstructs the legacy tool's "Consolidated Input" equivalent: one row per
-Plant-Line-SKU-Period, with Current FIN, Opening DOS, Target DOS, DOS Gap,
+Plant-Line-LinkCode-Period, with Current FIN, Opening DOS, Target DOS, DOS Gap,
 Priority, MOQ, Throughput and GE% all joined together.
+
+This version of the tool is Link-Code level only (LinkCode-Change branch):
+the Monthly Production Plan is read from MPS Output's `Link Code Line
+Loading 1` sheet, which has no SKU column at all -- there is no SKU concept
+anywhere in this codebase, not an alias for Link Code.
 
 Priority and MOQ come from the Manual Input workbook's `Priority(Linkcode
 Level)` sheet (REQ-CR-01 rebuild -- replaces the old text-matched "RCCP"
@@ -60,7 +65,7 @@ from engine.parsers.mps_output_parser import MPSOutputData, plant_line_columns
 
 CONSOLIDATED_COLUMNS = [
     "period", "month_num", "month_key", "plant", "line", "plant_line",
-    "link_code", "link_desc", "brand", "sku",
+    "link_code", "link_desc", "brand",
     "current_fin", "opening_dos", "target_dos", "dos_gap", "daily_demand",
     "priority", "moq_days", "throughput_per_day", "ge_pct",
     "row_assumptions",
@@ -101,15 +106,11 @@ def build(
     monthly_fin = mps_output.monthly_fin
     plant_line_cols = plant_line_columns(monthly_fin)
 
-    # SKU and Link Code both come from the FIN sheet here -- NOT from
-    # mps_input.sku_master, which is parsed but otherwise unused (see its
-    # module docstring and LIMITATIONS.md L4). This only works because
-    # SKU == Link Code 1:1 in all current client data. If the parked
-    # FIN-source switch to `Link Code Line Loading 1` ever happens, that
-    # sheet has no SKU column at all -- this melt would need to source SKU
-    # from mps_input.sku_master instead, not from here.
+    # Link Code comes straight from the FIN sheet -- there is no SKU column to
+    # read on this branch (mps_input.sku_master stays parsed-but-unused, same
+    # as on the SKU-based version; see its module docstring and LIMITATIONS.md L4).
     long_fin = monthly_fin.melt(
-        id_vars=["Period", "SKU", "Link Code", "Link Desc Description", "Brand"],
+        id_vars=["Period", "Link Code", "Link Desc Description", "Brand"],
         value_vars=plant_line_cols,
         var_name="plant_line",
         value_name="current_fin",
@@ -260,7 +261,7 @@ def build(
         else:
             target_dos = opening_dos  # no Avg_min_dos_target for this Link Code -> DOS gap = 0
             row_assumptions.append(
-                "One or more SKUs have no Linkcode_DIFC.Avg_min_dos_target value — "
+                "One or more Link Codes have no Linkcode_DIFC.Avg_min_dos_target value — "
                 "their DOS gap is treated as 0."
             )
 
@@ -298,7 +299,6 @@ def build(
             "link_code": link_code,
             "link_desc": link_desc,
             "brand": r["Brand"],
-            "sku": r["SKU"],
             "current_fin": float(r["current_fin"]),
             "opening_dos": opening_dos,
             "target_dos": target_dos,

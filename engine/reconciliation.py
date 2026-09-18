@@ -1,7 +1,7 @@
 """
 Reconciliation pass.
 
-The pool this SKU must fully account for across the run is:
+The pool this Link Code must fully account for across the run is:
     total_pool = current_fin + carryover_fin_in
 
 That pool is produced across wk1a + wk1..wk5 (carryover and current-month
@@ -15,7 +15,7 @@ current_fin, and treats wk1a as an active bucket like any other:
       but only as far as each week's REAL remaining capacity allows
       (24*7 - downtime - hours already used on the line; carried on
       AllocationResult.leftover_capacity). Whatever still won't fit rolls
-      to CARRYOVER_MPLUS1, exactly like a SKU that got no allocation.
+      to CARRYOVER_MPLUS1, exactly like a Link Code that got no allocation.
     - If NO bucket has any production at all, the entire pool rolls to
       CARRYOVER_MPLUS1 for next month -- nothing is silently dropped.
 
@@ -49,7 +49,7 @@ class ReconciledResult:
 
 def reconcile(alloc_result: AllocationResult) -> ReconciledResult:
     # Mutable copy of each line's real remaining weekly capacity (hours), so a
-    # top-up for one SKU reduces what is still available to the next SKU sharing
+    # top-up for one Link Code reduces what is still available to the next Link Code sharing
     # that line-week -- mirroring how allocation shares weekly capacity.
     leftover = {key: dict(caps) for key, caps in alloc_result.leftover_capacity.items()}
 
@@ -127,7 +127,7 @@ def assert_conservation(reconciled: ReconciledResult) -> list[str]:
         rhs = alloc.current_fin + alloc.carryover_fin_in
         if abs(lhs - rhs) > GAP_TOLERANCE:
             violations.append(
-                f"{alloc.plant_line}/{alloc.sku}/period {alloc.period}: "
+                f"{alloc.plant_line}/{alloc.link_code}/period {alloc.period}: "
                 f"produced+carryover_next={lhs:.2f} != fin+carryover_in={rhs:.2f}"
             )
     return violations

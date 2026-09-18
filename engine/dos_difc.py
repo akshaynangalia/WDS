@@ -58,7 +58,6 @@ class DIFCRow:
     plant_line: str
     period: int
     link_code: object
-    sku: object
     closing_by_week: dict[str, float] = field(default_factory=dict)
     approximated: bool = False
     # Output-only identifying/context fields, mirroring SkuAllocation's --
@@ -120,7 +119,7 @@ def compute(
 
         difc_rows.append(DIFCRow(
             plant_line=alloc.plant_line, period=alloc.period, link_code=alloc.link_code,
-            sku=alloc.sku, closing_by_week=closing_by_week,
+            closing_by_week=closing_by_week,
             plant=alloc.plant, line=alloc.line, brand=alloc.brand, link_desc=alloc.link_desc,
             month_key=alloc.month_key, opening_dos=opening,
             approximated=fallback.use_monthly_avg_dos,

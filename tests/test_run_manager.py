@@ -40,10 +40,10 @@ def _build_mps_input(path: str):
 def _build_mps_output(path: str):
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         pd.DataFrame({
-            "Period": [1], "SKU": [111111], "Brand": ["TestBrand"], "Link Code": [111111],
+            "Period": [1], "Brand": ["TestBrand"], "Link Code": [111111],
             "Link Desc Description": ["Test Product"], "O/S": [10], "DOS": [20],
             "TestPlant_Line1": [300.0],
-        }).to_excel(writer, sheet_name="SKU Line Loading 1", index=False)
+        }).to_excel(writer, sheet_name="Link Code Line Loading 1", index=False)
 
         pd.DataFrame({
             "Link Code": [111111], "Brand": ["TestBrand"], "Link Desc Description": ["Test Product"],
@@ -68,8 +68,9 @@ def test_full_pipeline_headless_produces_valid_workbook():
 
         wb = openpyxl.load_workbook(result.output_path)
         weekly_plan = wb["Weekly Plan"]
-        total_col = [c.value for c in next(weekly_plan.iter_rows(max_row=1))].index("TOTAL PRODUCED") + 1
-        total_value = weekly_plan.cell(row=2, column=total_col).value
+        headers_row2 = [c.value for c in next(weekly_plan.iter_rows(min_row=2, max_row=2))]
+        total_col = headers_row2.index("Total Produced") + 1
+        total_value = weekly_plan.cell(row=3, column=total_col).value
         assert round(total_value, 1) == 300.0  # must equal FIN -- the whole point of reconciliation
 
 

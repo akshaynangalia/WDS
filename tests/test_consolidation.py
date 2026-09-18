@@ -88,7 +88,7 @@ def test_target_dos_comes_from_avg_min_dos_target():
     )
     mps_output = MPSOutputData(
         monthly_fin=pd.DataFrame({
-            "Period": [1, 1], "SKU": [111, 222], "Link Code": [111, 222],
+            "Period": [1, 1], "Link Code": [111, 222],
             "Link Desc Description": ["Prod A", "Prod B"], "Brand": ["BrandA", "BrandB"],
             "P_L": [100.0, 50.0],
         }),
@@ -123,7 +123,7 @@ def test_target_dos_falls_back_to_opening_when_avg_min_dos_target_missing():
         sheets_found=set(),
     )
     mps_output = MPSOutputData(
-        monthly_fin=pd.DataFrame({"Period": [1], "SKU": [111], "Link Code": [111],
+        monthly_fin=pd.DataFrame({"Period": [1], "Link Code": [111],
                                   "Link Desc Description": ["Prod A"], "Brand": ["BrandA"],
                                   "P_L": [100.0]}),
         linkcode_difc=pd.DataFrame({"Link Code": [111], 1: [25.0], "Avg_min_dos_target": [float("nan")]}),
@@ -168,7 +168,7 @@ def test_unmatched_link_code_sorts_after_every_matched_one_in_its_group():
     )
     mps_output = MPSOutputData(
         monthly_fin=pd.DataFrame({
-            "Period": [1, 1, 1, 1], "SKU": [111, 222, 333, 444],
+            "Period": [1, 1, 1, 1],
             "Link Code": [111, 222, 333, 444],
             "Link Desc Description": ["A", "B", "C", "D"], "Brand": ["Br"] * 4,
             "P_L": [100.0, 100.0, 100.0, 100.0],
