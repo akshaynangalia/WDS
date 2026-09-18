@@ -305,3 +305,31 @@ def test_run_records_the_moq_case_per_link_code(no_fallback):
     assert {a.link_code: a.moq_case for a in result.rows} == {
         "A": "A", "B": "B", "C": "C", "D": "D", "N": "No MOQ",
     }
+
+
+def test_priority_override_serves_a_lower_priority_carryover_first(no_fallback):
+    # REQ-CR-05: a Link Code flagged by engine/changeover.py must be served
+    # first in the carryover pass, ahead of a normally-higher-priority one --
+    # this test exercises allocation.py's side of that contract directly.
+    hi = make_row("P_L1", link_code="HI", priority=1.0, current_fin=1.0, moq_days=None)
+    lo = make_row("P_L1", link_code="LO", priority=5.0, current_fin=1.0, moq_days=None)
+    table = make_consolidated([hi, lo])
+    # No calendar -> W1A has 0 capacity (see conftest/H3 tests), so this all
+    # plays out in the W1-W4 residual spread; both carryover asks (1000T each,
+    # spread as 250T/week) exceed a single week's own capacity (168T), so
+    # whichever Link Code is served FIRST consumes the entire wk1-wk4 pool
+    # (4 x 168T = 672T) and the other gets nothing.
+    carry_in = {("P_L1", "HI"): 1000.0, ("P_L1", "LO"): 1000.0}
+
+    baseline = allocation.run(table, calendar_df=None, fallback=no_fallback, carryover_fin_in=carry_in)
+    hi_base = next(a for a in baseline.rows if a.link_code == "HI")
+    lo_base = next(a for a in baseline.rows if a.link_code == "LO")
+    assert round(hi_base.total_current_month, 1) == 672.0  # normal priority order: HI goes first
+    assert round(lo_base.total_current_month, 1) == 0.0
+
+    overridden = allocation.run(table, calendar_df=None, fallback=no_fallback,
+                                carryover_fin_in=carry_in, priority_override={("P_L1", "LO")})
+    hi_over = next(a for a in overridden.rows if a.link_code == "HI")
+    lo_over = next(a for a in overridden.rows if a.link_code == "LO")
+    assert round(lo_over.total_current_month, 1) == 672.0  # LO overridden -> goes first instead
+    assert round(hi_over.total_current_month, 1) == 0.0

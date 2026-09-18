@@ -35,9 +35,15 @@ same treatment is applied per-Link-Code to any single Link Code whose MOQ is
 missing (e.g. no Priority(Linkcode Level) match for that row) even when
 other Link Codes on the line do have one.
 
+REQ-CR-05: priority_override (a set of (plant_line, link_code) pairs, from
+engine/changeover.py's previous-period computation) reorders ONLY the
+carryover-servicing pass above -- a flagged Link Code's own fresh FIN this
+period still goes through Run 1/Run 2 at its ordinary priority, untouched.
+
 Contract:
     consumes: ConsolidatedTable, calendar_df (or None), FallbackDecisions,
-              carryover_fin_in (dict keyed by (plant_line, link_code))
+              carryover_fin_in (dict keyed by (plant_line, link_code)),
+              priority_override (set of (plant_line, link_code), optional)
     produces: AllocationResult
 """
 from __future__ import annotations
@@ -123,8 +129,10 @@ def run(
     calendar_df: pd.DataFrame | None,
     fallback: FallbackDecisions,
     carryover_fin_in: dict[tuple[str, object], float] | None = None,
+    priority_override: set[tuple[str, object]] | None = None,
 ) -> AllocationResult:
     carryover_fin_in = carryover_fin_in or {}
+    priority_override = priority_override or set()
     all_rows: list[SkuAllocation] = []
     capacity_messages: list[str] = []
     leftover_capacity: dict[tuple[str, int], dict[str, float]] = {}
@@ -159,7 +167,16 @@ def run(
             )
 
         # --- Carryover (W1A) pass: happens before Run 1, per ground-truth doc ---
-        for r in link_code_rows:
+        # REQ-CR-05: a Link Code flagged by changeover.compute_priority_overrides()
+        # (still producing in the prior period's real last week, with carryover
+        # left) is served here ahead of everyone else -- this ordering applies
+        # ONLY to this carryover-servicing pass, never to Run 1/Run 2 below,
+        # which still use link_code_rows' normal priority order unchanged.
+        carryover_order = sorted(
+            link_code_rows,
+            key=lambda r: (0 if (plant_line, r["link_code"]) in priority_override else 1, r["priority"]),
+        )
+        for r in carryover_order:
             alloc = allocations[r["link_code"]]
             if alloc.carryover_fin_in <= 0:
                 continue
