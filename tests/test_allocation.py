@@ -41,6 +41,36 @@ def test_case_d_produces_exact_dos_gap(no_fallback):
     assert round(alloc.total_current_month, 1) == 240.0
 
 
+def test_case_b_splits_fin_into_two_approximately_equal_runs(no_fallback):
+    # REQ-CR-03 sub-item 3: a Case-B Link Code (dos_gap == 0) with FIN >= 1.5 x
+    # MOQ takes HALF its FIN in the Run 1 pass, not one MOQ batch; Run 2's
+    # remainder pass produces the other ~half.
+    #
+    # Two Case-B Link Codes share one line (default capacity: 4 weeks x 168 T
+    # at throughput 24 -> 672 T). Run 1 is a full pass over BOTH before Run 2
+    # starts, so a bigger Run 1 claim locks in shared, priority-ordered
+    # capacity. The split shifts 56 T from the priority-1 Link Code to the
+    # priority-2 one: with it, "hi" ends at 400 T / "lo" at 272 T; pre-CR-03
+    # (Run 1 = one 120 T MOQ batch) it was "hi" 456 T / "lo" 216 T.
+    rows = [
+        make_row("P_L1", link_code="hi", priority=1.0, current_fin=800.0, moq_days=5,
+                 throughput_per_day=24.0, opening_dos=20, target_dos=20),   # B, 800 >= 1.5 x 120
+        make_row("P_L1", link_code="lo", priority=2.0, current_fin=400.0, moq_days=5,
+                 throughput_per_day=24.0, opening_dos=20, target_dos=20),   # B, 400 >= 1.5 x 120
+    ]
+    result = allocation.run(make_consolidated(rows), calendar_df=None, fallback=no_fallback)
+    hi = next(a for a in result.rows if a.link_code == "hi")
+    lo = next(a for a in result.rows if a.link_code == "lo")
+
+    assert hi.moq_case == "B" and lo.moq_case == "B"
+    assert round(hi.wk1, 1) == 168.0 and round(hi.wk2, 1) == 168.0 and round(hi.wk3, 1) == 64.0  # Run 1 = FIN/2 = 400
+    assert round(lo.total_current_month, 1) == 272.0    # was 216.0 before CR-03
+    assert round(hi.total_current_month, 1) == 400.0    # was 456.0 before CR-03
+
+    reconciled = reconcile(result)
+    assert assert_conservation(reconciled) == []
+
+
 def test_moq_missing_fallback_skips_run1_and_still_reconciles():
     fb = FallbackDecisions(use_default_moq=True, messages=["MOQ not supplied..."])
     row = make_row("PlantM_Line1", current_fin=400.0, moq_days=None)
@@ -173,7 +203,7 @@ def test_run2_will_not_open_a_sub_moq_run_in_an_empty_week(no_fallback):
                       opening_dos=20, target_dos=20)
     starved = make_row("Tight_Line1", link_code="STARVED", priority=2.0,
                        current_fin=200.0, moq_days=5, throughput_per_day=24.0,
-                       opening_dos=20, target_dos=20)          # Case B -> Run 1 places one 120 T batch
+                       opening_dos=19, target_dos=20)          # Case C (gap 1d < MOQ) -> Run 1 places one 120 T floor batch
     result = allocation.run(make_consolidated([hungry, starved]), calendar_df=None, fallback=no_fallback)
     starved_alloc = next(a for a in result.rows if a.link_code == "STARVED")
 
@@ -204,7 +234,7 @@ def test_run2_deferral_message_blames_capacity_not_moq_when_line_is_full(no_fall
                       opening_dos=20, target_dos=20)              # No MOQ -> consumes ALL capacity, no sliver
     starved = make_row("Full_Line1", link_code="STARVED", priority=2.0,
                        current_fin=250.0, moq_days=5, throughput_per_day=24.0,
-                       opening_dos=20, target_dos=20)             # Case B -> Run 1 places one 120 T batch
+                       opening_dos=19, target_dos=20)             # Case C (gap 1d < MOQ) -> Run 1 places one 120 T floor batch
     result = allocation.run(make_consolidated([hungry, starved]), calendar_df=None, fallback=no_fallback)
     starved_alloc = next(a for a in result.rows if a.link_code == "STARVED")
 

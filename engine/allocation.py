@@ -5,9 +5,16 @@ only -- no SKU concept anywhere):
 
     Run 1 (DOS-gap closure), Case A/B/C/D:
         A: FIN < 1.5 x MOQ         -> produce entire FIN, skip Run 2
-        B: DOS gap = 0             -> produce one MOQ batch
+        B: DOS gap = 0             -> if FIN >= 1.5 x MOQ, produce half the FIN
+                                      (REQ-CR-03 sub-item 3: two approximately
+                                      equal runs -- Run 2 distributes the other
+                                      ~half); otherwise produce one MOQ batch
         C: DOS gap exists, < MOQ   -> produce one full MOQ (floor)
         D: DOS gap exists, >= MOQ  -> produce exactly the DOS gap
+
+    REQ-CR-03 sub-item 5 (DOS hard constraint overrides the split) is honoured
+    by leaving Cases C and D untouched: they only fire when a real DOS gap
+    exists, so the split never applies there. Case A is already a single run.
 
     Run 2 (remaining FIN distribution): whatever FIN Run 1 didn't cover is
     spread across remaining weekly capacity, in week order, never producing
@@ -219,7 +226,17 @@ def run(
             if moq_qty_equiv and fin < 1.5 * moq_qty_equiv:
                 qty, case = fin, "A"
             elif r["dos_gap"] == 0:
-                qty, case = moq_qty_equiv, "B"
+                # Case B: no DOS urgency. REQ-CR-03 sub-item 3 -- when FIN is
+                # large relative to the run-length (FIN >= 1.5 x MOQ), split it
+                # into two approximately equal runs: Run 1 takes half, Run 2's
+                # remainder pass produces the other ~half. Below that threshold
+                # -- only reachable here when moq_qty_equiv is 0 (throughput or
+                # MOQ zero), since Case A already claims every FIN < 1.5 x MOQ
+                # -- keep the single MOQ batch.
+                if moq_qty_equiv and fin >= 1.5 * moq_qty_equiv:
+                    qty, case = fin / 2.0, "B"
+                else:
+                    qty, case = moq_qty_equiv, "B"
             elif dos_gap_qty < moq_qty_equiv:
                 qty, case = moq_qty_equiv, "C"
             else:
