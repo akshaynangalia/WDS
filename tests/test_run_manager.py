@@ -312,3 +312,45 @@ def test_a_broken_health_check_never_fails_the_run(monkeypatch, run_log):
         assert result.status.value == "degraded" and os.path.exists(result.output_path)
         assert result.integrity_warnings == []
     assert any("HEALTH check could not run" in line for line in run_log)
+
+
+# --- Run Report wiring (PR: run report sheet) ----------------------------------
+
+def test_stage_timings_are_aggregated_per_stage_in_first_seen_order():
+    from orchestration.run_manager import _aggregate_stages
+
+    stages = _aggregate_stages([("parse", 1.0), ("allocation", 0.25), ("reconciliation", 0.5),
+                                ("allocation", 0.25), ("allocation", 0.5)])
+    assert [(s.name, s.runs, round(s.seconds, 2)) for s in stages] == [
+        ("parse", 1, 1.0), ("allocation", 3, 1.0), ("reconciliation", 1, 0.5),
+    ]
+
+
+def test_a_real_run_ends_with_a_run_report_that_matches_its_log_reference():
+    with tempfile.TemporaryDirectory() as tmp:
+        mps_input_path, mps_output_path = _inputs(tmp)
+        result = execute_run(mps_input_path, mps_output_path, None,
+                             RunParams(start_period=1, end_period=1), output_dir=tmp)
+        wb = openpyxl.load_workbook(result.output_path)
+
+    assert wb.sheetnames == ["Weekly Plan", "Comparison Table", "Weekly DIFC Summary",
+                             "Assumption Applied", "Run Report"]
+    ws = wb["Run Report"]
+    rows = {ws.cell(row=r, column=1).value: ws.cell(row=r, column=2).value for r in range(1, ws.max_row + 1)}
+    assert rows["Reference"] == result.trace_id                  # same id as run=<id> in the log
+    assert rows["Periods"] == "1-1" and "Degraded" in rows["Status"]
+    assert rows["allocation"] == "1 run, " + rows["allocation"].split(", ", 1)[1]
+    assert rows["MPS Input"].startswith("sha256=") and rows["Manual Input"] == "not-supplied"
+    assert rows["conservation"].startswith("PASS")
+    assert "excel_write" not in rows                              # the report cannot time its own writing
+
+
+def test_a_failed_run_produces_no_workbook_and_so_no_run_report(monkeypatch):
+    from orchestration import run_manager
+
+    monkeypatch.setattr(run_manager.allocation, "run", lambda *a, **k: (_ for _ in ()).throw(KeyError("x")))
+    with tempfile.TemporaryDirectory() as tmp:
+        mps_input_path, mps_output_path = _inputs(tmp)
+        result = execute_run(mps_input_path, mps_output_path, None,
+                             RunParams(start_period=1, end_period=1), output_dir=tmp)
+    assert result.status.value == "failed" and result.output_path is None

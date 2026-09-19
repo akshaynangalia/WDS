@@ -107,3 +107,12 @@ def test_code_version_reports_the_version_file(monkeypatch):
 def test_run_ids_are_unique_and_sortable():
     ids = {logging_config.new_run_id() for _ in range(50)}
     assert len(ids) == 50
+
+
+def test_log_timestamps_are_utc_matching_run_ids_and_the_run_report():
+    formatter = logging_config._AsciiFormatter(logging_config._FORMAT, logging_config._DATE_FORMAT)
+    record = logging.LogRecord("wds.run", logging.INFO, __file__, 1, "hello", None, None)
+    record.created = 86400.0        # 1970-01-02 00:00:00 UTC, regardless of the machine's timezone
+    record.msecs = 0.0
+    record.run_id = "-"
+    assert formatter.format(record).startswith("1970-01-02 00:00:00Z | INFO    | run=- | hello")

@@ -25,6 +25,7 @@ Contract:
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import hashlib
 import logging
 import os
@@ -36,6 +37,7 @@ from engine import allocation, capacity, carryover, changeover, consolidation, d
 from engine.engine_result import EngineResult
 from engine.parsers import manual_input_parser, mps_input_parser, mps_output_parser, validation
 from engine.reconciliation import ReconciledResult, reconcile
+from engine.run_report import RunReport, StageTiming
 from orchestration import logging_config
 from orchestration.models import RunParams, RunResult, RunStatus
 from output import excel_writer
@@ -44,6 +46,10 @@ log = logging.getLogger("wds.run")
 
 _MAX_LOGGED_MESSAGES = 20  # per kind, so one bad input cannot flood the log
 _MAX_LOGGED_ROW_FAILURES = 10
+
+
+# Run-scoped record of (stage, seconds) for the Run Report; None outside a run.
+_stage_timings: contextvars.ContextVar[list | None] = contextvars.ContextVar("wds_stage_timings", default=None)
 
 
 class _StageFailed(Exception):
@@ -68,7 +74,11 @@ def _stage(name: str, period=None):
     except Exception as exc:
         log.exception("STAGE %s FAILED%s %s: %s", name, where, type(exc).__name__, exc)
         raise _StageFailed(name, period, exc) from exc
-    emit("STAGE %s END%s %.2fs", name, where, time.perf_counter() - started)
+    elapsed = time.perf_counter() - started
+    emit("STAGE %s END%s %.2fs", name, where, elapsed)
+    timings = _stage_timings.get()
+    if timings is not None:
+        timings.append((name, elapsed))
 
 
 def _fingerprint(source) -> str:
@@ -86,6 +96,16 @@ def _fingerprint(source) -> str:
         return f"sha256={hashlib.sha256(data).hexdigest()[:12]} size={len(data)}"
     except Exception:
         return "n/a"
+
+
+def _aggregate_stages(timings: list[tuple[str, float]]) -> list[StageTiming]:
+    """One line per stage, in first-seen order (allocation runs once per period)."""
+    totals: dict[str, list] = {}
+    for name, seconds in timings:
+        entry = totals.setdefault(name, [0, 0.0])
+        entry[0] += 1
+        entry[1] += seconds
+    return [StageTiming(name=n, runs=r, seconds=sec) for n, (r, sec) in totals.items()]
 
 
 def _log_messages(kind: str, messages) -> None:
@@ -111,12 +131,18 @@ def execute_run(
                  params.start_period, params.end_period,
                  ",".join(params.lines) if params.lines else "all",
                  params.min_dos_override, logging_config.code_version())
-        log.info("INPUT mps_input %s", _fingerprint(mps_input_file))
-        log.info("INPUT mps_output %s", _fingerprint(mps_output_file))
-        log.info("INPUT manual_input %s", _fingerprint(manual_input_file))
+        inputs = [
+            ("MPS Input", _fingerprint(mps_input_file)),
+            ("MPS Output", _fingerprint(mps_output_file)),
+            ("Manual Input", _fingerprint(manual_input_file)),
+        ]
+        for label, fingerprint in inputs:
+            log.info("INPUT %s %s", label.lower().replace(" ", "_"), fingerprint)
 
+        timings_token = _stage_timings.set([])
         try:
-            result = _run_pipeline(mps_input_file, mps_output_file, manual_input_file, params, output_dir)
+            result = _run_pipeline(mps_input_file, mps_output_file, manual_input_file, params, output_dir,
+                                   trace_id=trace_id, inputs=inputs, started=started)
         except _StageFailed as failure:
             where = f" (period {failure.period})" if failure.period is not None else ""
             log.error("RUN_FAILED stage=%s%s", failure.stage,
@@ -131,6 +157,8 @@ def execute_run(
                 status=RunStatus.FAILED, output_path=None,
                 errors=[f"Unexpected error: {exc} [ref {trace_id}]"],
             )
+        finally:
+            _stage_timings.reset(timings_token)
 
         result.trace_id = trace_id
         log.info("RUN_END status=%s output=%s duration=%.2fs",
@@ -138,7 +166,8 @@ def execute_run(
         return result
 
 
-def _run_pipeline(mps_input_file, mps_output_file, manual_input_file, params, output_dir) -> RunResult:
+def _run_pipeline(mps_input_file, mps_output_file, manual_input_file, params, output_dir,
+                  trace_id: str = "-", inputs=None, started: float | None = None) -> RunResult:
     try:
         with _stage("parse"):
             mps_input = mps_input_parser.parse(mps_input_file)
@@ -192,16 +221,33 @@ def _run_pipeline(mps_input_file, mps_output_file, manual_input_file, params, ou
     _log_messages("CAPACITY", capacity_messages)
 
     combined_reconciled = ReconciledResult(rows=all_reconciled_rows)
-    integrity_warnings = _run_health_checks(all_reconciled_rows)
+    health_report, integrity_warnings = _run_health_checks(all_reconciled_rows)
 
     with _stage("dos_difc"):
         difc_result = dos_difc.compute(all_reconciled_rows, df, mps_input.demand, decisions)
+
+    run_report = RunReport(
+        reference=trace_id,
+        generated_utc=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        version=logging_config.code_version(),
+        status="degraded" if decisions.any_fallback_applied else "success",
+        periods=f"{params.start_period}-{params.end_period}",
+        lines=", ".join(params.lines) if params.lines else "all",
+        min_dos_entered=params.min_dos_override,
+        inputs=list(inputs or []),
+        stages=_aggregate_stages(_stage_timings.get() or []),
+        elapsed_seconds=(time.perf_counter() - started) if started is not None else 0.0,
+        fallback_messages=list(dict.fromkeys(decisions.messages)),
+        capacity_messages=list(dict.fromkeys(capacity_messages)),
+        health=health_report,
+    )
 
     engine_result = EngineResult(
         reconciled=combined_reconciled,
         difc=difc_result,
         fallback=decisions,
         capacity_messages=capacity_messages,
+        run_report=run_report,
     )
 
     with _stage("excel_write"):
@@ -219,13 +265,14 @@ def _run_pipeline(mps_input_file, mps_output_file, manual_input_file, params, ou
     )
 
 
-def _run_health_checks(rows: list) -> list[str]:
-    """Never allowed to fail the run: a broken check is logged and skipped."""
+def _run_health_checks(rows: list):
+    """Never allowed to fail the run: a broken check is logged and skipped.
+    Returns (report or None, user-facing warnings)."""
     try:
         report = health_checks.check(rows)
     except Exception:
         log.exception("HEALTH check could not run -- skipped")
-        return []
+        return None, []
     for check in report.checks:
         if check.ok:
             log.info("HEALTH %s ok %s", check.name, check.detail)
@@ -235,4 +282,4 @@ def _run_health_checks(rows: list) -> list[str]:
             log.error("INTEGRITY_FAILED_ROW %s", failure)
         if len(check.failures) > _MAX_LOGGED_ROW_FAILURES:
             log.error("INTEGRITY_FAILED_ROW ... and %d more", len(check.failures) - _MAX_LOGGED_ROW_FAILURES)
-    return report.warnings
+    return report, report.warnings

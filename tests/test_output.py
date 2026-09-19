@@ -256,3 +256,137 @@ def test_difc_summary_approximated_is_static_and_wk5_only_where_data_exists():
     by_lc = df.set_index("Linkcode")
     assert by_lc.loc["L1", "Jun-26 | WK5"] == 5.0
     assert pd.isna(by_lc.loc["L2", "Jun-26 | WK5"])  # same period, no wk5 key for this row
+
+
+# --- Run Report sheet ---------------------------------------------------------
+
+import dataclasses
+
+from engine.health_checks import HealthCheck, HealthReport
+from engine.run_report import RunReport, StageTiming
+from output import run_report_sheet
+
+
+def _report(**overrides):
+    base = dict(
+        reference="20260919-125409-29d5", generated_utc="2026-09-19 12:54:09", version="0.1.0+abc1234",
+        status="degraded", periods="1-10", lines="all", min_dos_entered=None,
+        inputs=[("MPS Input", "sha256=7de74d4805b5 size=940149"), ("Manual Input", "not-supplied")],
+        stages=[StageTiming("parse", 1, 0.74), StageTiming("allocation", 10, 0.62)],
+        elapsed_seconds=2.1,
+        fallback_messages=["Weekly Demand not supplied - DIFC approximated."],
+        capacity_messages=[],
+        health=HealthReport(checks=[HealthCheck("conservation", True, "rows=942 max_dev=0.218T tol=0.5T violations=0")]),
+    )
+    base.update(overrides)
+    return RunReport(**base)
+
+
+def _write_with_report(report):
+    result = dataclasses.replace(_sample_engine_result(fallback_applied=False), run_report=report)
+    tmp = tempfile.TemporaryDirectory()
+    path = os.path.join(tmp.name, "out.xlsx")
+    excel_writer.write(result, path)
+    return tmp, openpyxl.load_workbook(path)
+
+
+def _find(ws, label, after_section=None):
+    """(row, value) of the first row whose column A equals label."""
+    for row in range(1, ws.max_row + 1):
+        if ws.cell(row=row, column=1).value == label:
+            return row, ws.cell(row=row, column=2).value
+    raise AssertionError(f"no row labelled {label!r}")
+
+
+def test_no_run_report_sheet_unless_the_run_supplies_one():
+    result = _sample_engine_result(fallback_applied=False)  # run_report defaults to None
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "out.xlsx")
+        excel_writer.write(result, path)
+        assert openpyxl.load_workbook(path).sheetnames == [
+            "Weekly Plan", "Comparison Table", "Weekly DIFC Summary", "Assumption Applied",
+        ]
+
+
+def test_run_report_is_appended_last_so_approved_sheets_do_not_move():
+    tmp, wb = _write_with_report(_report())
+    with tmp:
+        assert wb.sheetnames == [
+            "Weekly Plan", "Comparison Table", "Weekly DIFC Summary", "Assumption Applied", "Run Report",
+        ]
+
+
+def test_run_report_shows_the_run_summary_inputs_stages_and_fallbacks():
+    tmp, wb = _write_with_report(_report(min_dos_entered=None))
+    with tmp:
+        ws = wb["Run Report"]
+        assert _find(ws, "Reference")[1] == "20260919-125409-29d5"
+        assert _find(ws, "Generated (UTC)")[1] == "2026-09-19 12:54:09"
+        assert _find(ws, "Tool version")[1] == "0.1.0+abc1234"
+        assert "Degraded" in _find(ws, "Status")[1]
+        assert _find(ws, "Periods")[1] == "1-10"
+        assert _find(ws, "MPS Input")[1] == "sha256=7de74d4805b5 size=940149"
+        assert _find(ws, "Manual Input")[1] == "not-supplied"
+        assert _find(ws, "allocation")[1] == "10 runs, 0.62 s total"
+        assert _find(ws, "parse")[1] == "1 run, 0.74 s total"
+        assert _find(ws, "Run-level fallbacks applied")[1] == 1
+        assert any(ws.cell(row=r, column=2).value == "Weekly Demand not supplied - DIFC approximated."
+                   for r in range(1, ws.max_row + 1))
+        assert "Minimum DOS override entered" not in [ws.cell(row=r, column=1).value for r in range(1, ws.max_row + 1)]
+        assert not any("INTEGRITY WARNING" in str(ws.cell(row=r, column=1).value) for r in range(1, ws.max_row + 1))
+
+
+def test_a_minimum_dos_the_planner_typed_is_reported_as_not_applied():
+    # The UI collects it but the engine does not use it yet -- the report must
+    # not let a planner believe it took effect.
+    tmp, wb = _write_with_report(_report(min_dos_entered=5.0))
+    with tmp:
+        _, value = _find(wb["Run Report"], "Minimum DOS override entered")
+        assert "5 days" in value and "does not apply it" in value
+
+
+def test_a_failed_health_check_gives_a_loud_red_banner_and_fail_rows():
+    failing = HealthReport(checks=[
+        HealthCheck("conservation", False, "rows=942 max_dev=50.000T tol=0.5T violations=3", ["a", "b", "c"]),
+        HealthCheck("nan", True, "rows=942 violations=0"),
+    ])
+    tmp, wb = _write_with_report(_report(health=failing))
+    with tmp:
+        ws = wb["Run Report"]
+        banner = ws["A3"]
+        assert "INTEGRITY WARNING" in banner.value and "conservation (3 row(s))" in banner.value
+        assert "20260919-125409-29d5" in banner.value               # log reference, to find the rows
+        assert banner.fill.fgColor.rgb == "FFC0392B" and banner.font.bold
+        row, value = _find(ws, "conservation")
+        assert value.startswith("FAIL") and ws.cell(row=row, column=2).fill.fgColor.rgb == "FFF8D7DA"
+        row, value = _find(ws, "nan")
+        assert value.startswith("PASS") and ws.cell(row=row, column=2).fill.fgColor.rgb == "FFDFF0D8"
+
+
+def test_health_checks_that_could_not_run_are_shown_not_hidden():
+    tmp, wb = _write_with_report(_report(health=None))
+    with tmp:
+        _, value = _find(wb["Run Report"], "All checks")
+        assert value.startswith("NOT RUN")
+
+
+def test_long_capacity_fallback_lists_are_capped_with_a_pointer_to_the_full_list():
+    messages = [f"No Calendar data found for P/L{i}, Jun-26 W2 -- using default full-week capacity." for i in range(30)]
+    tmp, wb = _write_with_report(_report(capacity_messages=messages))
+    with tmp:
+        ws = wb["Run Report"]
+        assert _find(ws, "Capacity fallbacks applied")[1] == 30
+        shown = [ws.cell(row=r, column=2).value for r in range(1, ws.max_row + 1)]
+        assert sum(1 for v in shown if isinstance(v, str) and v.startswith("No Calendar data found")) == 10
+        assert any(isinstance(v, str) and "and 20 more" in v and "Assumption Applied" in v for v in shown)
+
+
+def test_a_broken_run_report_never_costs_the_plan(monkeypatch):
+    def boom(workbook, report):
+        workbook.create_sheet(run_report_sheet.SHEET_NAME)  # half-built sheet, then failure
+        raise RuntimeError("renderer bug")
+
+    monkeypatch.setattr(run_report_sheet, "write", boom)
+    tmp, wb = _write_with_report(_report())
+    with tmp:
+        assert wb.sheetnames == ["Weekly Plan", "Comparison Table", "Weekly DIFC Summary", "Assumption Applied"]

@@ -37,20 +37,21 @@ The app runs at `http://localhost:8050` (matching the reference UI mockups).
 
 ## Logging and Failure Handling
 
-Every run writes one plain-text line per event to **stdout** — on Posit Connect this is what appears in the content's Logs panel. Each line carries `run=<id>`; the same id is quoted as `[ref <id>]` in any failure message shown to the user, so a reported problem can be matched to its log lines.
+Every run writes one plain-text line per event (timestamps in **UTC**, marked `Z`) to **stdout** — on Posit Connect this is what appears in the content's Logs panel. Each line carries `run=<id>`; the same id is quoted as `[ref <id>]` in any failure message shown to the user, so a reported problem can be matched to its log lines.
 
 ```
-2026-09-19 10:15:03 | INFO    | run=20260919-101503-a1b2 | RUN_START periods=1-10 lines=all min_dos=None version=0.1.0+f332c67
-2026-09-19 10:15:03 | INFO    | run=20260919-101503-a1b2 | INPUT mps_input sha256=9f2c41ab07de size=1843201
-2026-09-19 10:15:04 | INFO    | run=20260919-101503-a1b2 | STAGE consolidation END 0.31s
-2026-09-19 10:15:05 | INFO    | run=20260919-101503-a1b2 | PERIOD 4 done rows=94 carryover_links=12 changeover_flags=3 0.19s
-2026-09-19 10:15:06 | INFO    | run=20260919-101503-a1b2 | HEALTH conservation ok rows=942 max_dev=0.218T tol=0.5T violations=0
-2026-09-19 10:15:06 | INFO    | run=20260919-101503-a1b2 | RUN_END status=degraded output=/tmp/weekly_plan_20260919_101506.xlsx duration=2.10s
+2026-09-19 10:15:03Z | INFO    | run=20260919-101503-a1b2 | RUN_START periods=1-10 lines=all min_dos=None version=0.1.0+f332c67
+2026-09-19 10:15:03Z | INFO    | run=20260919-101503-a1b2 | INPUT mps_input sha256=9f2c41ab07de size=1843201
+2026-09-19 10:15:04Z | INFO    | run=20260919-101503-a1b2 | STAGE consolidation END 0.31s
+2026-09-19 10:15:05Z | INFO    | run=20260919-101503-a1b2 | PERIOD 4 done rows=94 carryover_links=12 changeover_flags=3 0.19s
+2026-09-19 10:15:06Z | INFO    | run=20260919-101503-a1b2 | HEALTH conservation ok rows=942 max_dev=0.218T tol=0.5T violations=0
+2026-09-19 10:15:06Z | INFO    | run=20260919-101503-a1b2 | RUN_END status=degraded output=/tmp/weekly_plan_20260919_101506.xlsx duration=2.10s
 ```
 
 - **A stage that crashes** is logged with its full traceback and shown to the user as `'allocation' failed (period 4): … [ref …]`. Grep the log for `RUN_FAILED`.
 - **A failed run-time health check** (`INTEGRITY_FAILED`) does not block the output; the file is still produced, the status line carries an `INTEGRITY WARNING`, and the failing rows are logged.
 - **Inputs are identified, not stored**: the log records each upload's short SHA-256 and size, so a developer can ask for the exact file behind a reported problem.
+- **Run Report sheet**: every workbook produced by a run ends with a `Run Report` tab — reference (the same id as `run=` in the log), UTC time, tool version, status, input fingerprints, health-check results (a red banner if one failed), stage timings and run-level fallbacks. It is appended last so the four plan sheets keep their positions. It cannot know its own final duration (it is written inside the workbook), so it shows elapsed time *until the report was written*; the log's `RUN_END` line has the true total.
 - Settings (all optional): `WDS_LOG_LEVEL` (default `INFO`; `DEBUG` adds per-period stage detail), `WDS_LOG_FILE` (extra log copy, ignored if it cannot be opened), `WDS_VERSION` (overrides the reported version).
 - The version comes from the `VERSION` file (bump it in the release PR); on a development machine the short git commit is appended.
 
