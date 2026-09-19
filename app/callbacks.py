@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 
 from dash import Dash, Input, Output, State, dcc, html
 
@@ -19,10 +20,22 @@ from orchestration.models import RunParams
 from orchestration import run_history
 from orchestration.run_manager import execute_run
 
+log = logging.getLogger("wds.run")
+
 
 def _decode(contents: str) -> io.BytesIO:
     _, content_string = contents.split(",", 1)
     return io.BytesIO(base64.b64decode(content_string))
+
+
+def _safe_record_run(params, result) -> None:
+    """Run history is a convenience record. If it cannot be written (read-only
+    folder, locked database), that must never cost the planner a run that
+    already finished -- log it and carry on."""
+    try:
+        run_history.record_run(params, result)
+    except Exception as exc:
+        log.warning("HISTORY_WRITE_FAILED ref=%s %s: %s", result.trace_id, type(exc).__name__, exc)
 
 
 def _checklist(expected: list[str], found: set[str]) -> list:
@@ -148,10 +161,13 @@ def register_callbacks(app: Dash):
         )
         manual_file = _decode(manual_input_contents) if manual_input_contents else None
         result = execute_run(_decode(mps_input_contents), _decode(mps_output_contents), manual_file, params)
-        run_history.record_run(params, result)
+        _safe_record_run(params, result)
 
         if result.status.value == "failed":
             return f"Run failed: {'; '.join(result.errors)}", None
 
         status_text = "Run complete" + (" (degraded mode — see Assumption Applied tab)" if result.status.value == "degraded" else "")
+        if result.integrity_warnings:
+            # Loud, but the output is still delivered (client decision).
+            status_text += f" — INTEGRITY WARNING: {'; '.join(result.integrity_warnings)} (ref {result.trace_id})"
         return status_text, dcc.send_file(result.output_path)

@@ -29,3 +29,5 @@ class RunResult:
     errors: list[str] = field(default_factory=list)
     run_id: int | None = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    trace_id: str | None = None          # reference tying this result to its log lines ("ref" in messages)
+    integrity_warnings: list[str] = field(default_factory=list)  # failed run-time health checks; output still produced
