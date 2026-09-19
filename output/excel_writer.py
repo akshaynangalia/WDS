@@ -8,10 +8,11 @@ output/period_pivot.py for why weekly_plan_sheet.py doesn't share the same
 code path as the other two despite the identical shape. Assumption Applied
 stays a plain one-row-header sheet.
 
-A fifth "Run Report" sheet is appended LAST -- so no approved sheet moves --
-but only when the run supplies a RunReport (EngineResult.run_report). It is
-written in isolation: if building it fails the sheet is dropped, the error is
-logged, and the four approved sheets are still delivered.
+A fifth "Run Report" sheet and a sixth "Calculation Trace" sheet are appended
+LAST -- so no approved sheet moves -- but only when the run supplies a
+RunReport (EngineResult.run_report), i.e. for real runs. Each is written in
+isolation: if building one fails it is dropped, the error is logged, and the
+four approved sheets (and the other diagnostic sheet) are still delivered.
 
 Contract:
     consumes: EngineResult, output file path
@@ -26,6 +27,7 @@ import pandas as pd
 from engine.engine_result import EngineResult
 from output import (
     assumptions_sheet,
+    calculation_trace_sheet,
     comparison_table_sheet,
     difc_summary_sheet,
     run_report_sheet,
@@ -72,8 +74,19 @@ def write(result: EngineResult, output_path: str) -> str:
 
         if result.run_report is not None:
             _write_run_report(writer.book, result.run_report)
+            _write_calculation_trace(writer.book, result.reconciled.rows)
 
     return output_path
+
+
+def _write_calculation_trace(workbook, rows) -> None:
+    """Explanatory only -- never allowed to cost the plan or the Run Report."""
+    try:
+        calculation_trace_sheet.write(workbook, rows)
+    except Exception:
+        log.exception("CALCULATION_TRACE could not be written -- sheet skipped, plan delivered without it")
+        if calculation_trace_sheet.SHEET_NAME in workbook.sheetnames:
+            del workbook[calculation_trace_sheet.SHEET_NAME]
 
 
 def _write_run_report(workbook, report) -> None:

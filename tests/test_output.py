@@ -312,7 +312,8 @@ def test_run_report_is_appended_last_so_approved_sheets_do_not_move():
     tmp, wb = _write_with_report(_report())
     with tmp:
         assert wb.sheetnames == [
-            "Weekly Plan", "Comparison Table", "Weekly DIFC Summary", "Assumption Applied", "Run Report",
+            "Weekly Plan", "Comparison Table", "Weekly DIFC Summary", "Assumption Applied",
+            "Run Report", "Calculation Trace",
         ]
 
 
@@ -389,4 +390,170 @@ def test_a_broken_run_report_never_costs_the_plan(monkeypatch):
     monkeypatch.setattr(run_report_sheet, "write", boom)
     tmp, wb = _write_with_report(_report())
     with tmp:
-        assert wb.sheetnames == ["Weekly Plan", "Comparison Table", "Weekly DIFC Summary", "Assumption Applied"]
+        assert wb.sheetnames == ["Weekly Plan", "Comparison Table", "Weekly DIFC Summary", "Assumption Applied",
+                                 "Calculation Trace"]  # the other diagnostic sheet is unaffected
+
+
+# --- Calculation Trace sheet ---------------------------------------------------
+
+import random
+import re
+
+from output import calculation_trace_sheet
+from output.calculation_trace_sheet import difference_t, explain
+
+
+def _traced(**kw):
+    base = dict(
+        plant_line="P_L1", period=1, link_code="L1", priority=1.0, current_fin=100.0, carryover_fin_in=0.0,
+        plant="P", line="L1", month_key="Jun-26", throughput_per_day=24.0, ge_pct=1.0, daily_demand=24.0,
+        moq_case="A", moq_qty=240.0, run1_target=100.0, run1_placed=100.0, wk1=100.0,
+    )
+    base.update(kw)
+    return SkuAllocation(**base)
+
+
+def test_explain_case_a_whole_fin_in_run_1():
+    a = _traced(current_fin=90.6, moq_qty=110.3, run1_target=90.6, run1_placed=90.6, wk1=90.6)
+    assert explain(a) == "Case A: FIN 90.6 T < 1.5 x MOQ batch 110.3 T -> whole FIN in Run 1. Carry-out 0.0 T."
+
+
+def test_explain_case_b_split_shows_half_in_run_1_and_the_rest_in_run_2():
+    a = _traced(moq_case="B", current_fin=454.0, moq_qty=54.0, run1_target=227.0, run1_placed=227.0,
+                run2_placed=227.0, wk1=454.0)
+    assert explain(a) == ("Case B: no DOS gap, FIN 454.0 T >= 1.5 x MOQ batch 54.0 T -> half (227.0 T) in Run 1. "
+                          "Run 2 placed 227.0 T. Carry-out 0.0 T.")
+
+
+def test_explain_case_c_and_d_show_the_dos_gap_arithmetic():
+    c = _traced(moq_case="C", current_fin=500.0, dos_gap_days=2.0, daily_demand=24.0, dos_gap_qty=48.0,
+                moq_qty=120.0, run1_target=120.0, run1_placed=120.0, run2_placed=380.0)
+    assert explain(c).startswith("Case C: DOS gap 2.0 d x 24.0 T/d = 48.0 T < MOQ batch 120.0 T "
+                                 "-> one MOQ batch (120.0 T) in Run 1.")
+    d = _traced(moq_case="D", current_fin=500.0, dos_gap_days=10.0, daily_demand=24.0, dos_gap_qty=240.0,
+                moq_qty=120.0, run1_target=240.0, run1_placed=240.0, run2_placed=260.0)
+    assert explain(d).startswith("Case D: DOS gap 10.0 d x 24.0 T/d = 240.0 T >= MOQ batch 120.0 T -> 240.0 T in Run 1.")
+
+
+def test_explain_no_moq_skips_run_1():
+    a = _traced(moq_case="No MOQ", run1_target=0.0, run1_placed=0.0, run2_placed=100.0)
+    assert explain(a) == "No MOQ: all FIN goes through Run 2. Run 2 placed 100.0 T. Carry-out 0.0 T."
+
+
+def test_explain_carry_in_spread_unplaced_and_served_first():
+    a = _traced(carryover_fin_in=335.1, wk1a=51.8, carry_spread=283.2, changeover_first=True, wk1=283.2,
+                run1_target=0.0, run1_placed=0.0, moq_case="No MOQ")
+    assert explain(a).startswith("Carry-in 335.1 T: 51.8 T in W1A, 283.2 T spread over W1-W4, "
+                                 "0.1 T could not be placed (no capacity); served first (month-end changeover rule).")
+
+
+def test_explain_says_when_run_1_could_not_place_its_target_and_why_run_2_deferred():
+    a = _traced(moq_case="B", current_fin=883.0, moq_qty=116.5, run1_target=441.5, run1_placed=248.7,
+                run2_deferred=351.1, run2_moq_blocked=False, wk1=248.7, carryover_next=634.4)
+    text = explain(a)
+    assert "half (441.5 T) in Run 1, only 248.7 T fitted." in text
+    assert "351.1 T could not be placed in Run 2 (no capacity left)." in text
+    assert text.endswith("Carry-out 634.4 T.")
+
+    blocked = _traced(run2_deferred=44.3, run2_moq_blocked=True, carryover_next=44.3)
+    assert "44.3 T could not be placed in Run 2 (below the MOQ run-length floor)." in explain(blocked)
+
+
+def test_explain_mentions_a_reconciliation_adjustment_only_when_it_is_material():
+    assert "Reconciliation adjusted +0.4 T." in explain(_traced(recon_adjustment=0.4))
+    assert "Reconciliation" not in explain(_traced(recon_adjustment=0.0))
+    assert "Reconciliation" not in explain(_traced(recon_adjustment=0.04))
+
+
+def test_displayed_dos_gap_arithmetic_always_checks_out_on_a_calculator():
+    # A planner multiplying the two displayed factors must get the displayed product
+    # to within the display precision (0.05 T) whenever the sentence says "=". Where
+    # that would need more than 3 decimals it says "~" instead -- never a false "=".
+    # (With a fixed one-decimal display, 57 of 102 real Case C/D rows failed this.)
+    rng = random.Random(7)
+    pattern = re.compile(r"DOS gap ([\d.]+) d x ([\d.]+) T/d ([=~]) ([\d.]+) T")
+    approx = 0
+    for _ in range(3000):
+        days, demand = rng.uniform(0.05, 60), rng.uniform(0.05, 40)
+        a = _traced(moq_case="D", dos_gap_days=days, daily_demand=demand, dos_gap_qty=days * demand,
+                    run1_target=days * demand, run1_placed=days * demand)
+        factor1, factor2, connector, product = pattern.search(explain(a)).groups()
+        assert max(len(factor1.split(".")[1]), len(factor2.split(".")[1])) <= 3
+        error = abs(float(factor1) * float(factor2) - float(product))
+        if connector == "=":
+            assert error <= 0.0501, (days, demand, explain(a))
+        else:
+            approx += 1
+            assert error <= 0.15, (days, demand, explain(a))     # still close, and honest about it
+    assert approx < 3000 * 0.25                                    # "~" is the exception, not the rule
+
+
+def test_explain_says_approximately_when_an_exact_product_would_need_many_decimals():
+    # The real Baddi/E2 687104 Oct-26 row: exact factors would be 4.98833 x 85.73015.
+    a = _traced(moq_case="D", dos_gap_days=4.98833, daily_demand=85.73015, dos_gap_qty=427.7,
+                moq_qty=52.0, run1_target=427.7, run1_placed=427.7)
+    assert "DOS gap 4.988 d x 85.730 T/d ~ 427.7 T" in explain(a)
+
+
+def test_difference_is_the_real_conservation_residual():
+    # Real-data example: 21.78 FIN + 21.8 carry-in = 43.58 pool, but 43.8 produced.
+    a = _traced(current_fin=21.78196661689216, carryover_fin_in=21.8, wk1a=16.0, wk1=23.3, wk2=1.5, wk3=1.5, wk4=1.5)
+    assert difference_t(a) == 0.22
+    assert difference_t(_traced(current_fin=100.0, wk1=100.0)) == 0.0
+
+
+def _trace_ws(rows):
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    calculation_trace_sheet.write(wb, rows)
+    return wb[calculation_trace_sheet.SHEET_NAME]
+
+
+def test_trace_sheet_is_long_format_sorted_filterable_with_a_footnote():
+    rows = [
+        _traced(plant="P2", plant_line="P2_L1", link_code="LC9", period=2, month_key="Jul-26", wk1=50.0, current_fin=50.0),
+        _traced(plant="P1", plant_line="P1_L1", link_code="LC5", period=2, month_key="Jul-26", wk1=20.0, current_fin=20.0),
+        _traced(plant="P1", plant_line="P1_L1", link_code="LC5", period=1, month_key="Jun-26", wk1=30.0, current_fin=30.0),
+    ]
+    ws = _trace_ws(rows)
+
+    assert [c.value for c in ws[1]] == [
+        "Plant", "Line", "Linkcode", "Month", "Case", "Total FIN (T)", "Carry-in (T)", "Throughput (T/day)", "GE %",
+        "Daily demand (T/day)", "Produced (T)", "Carry-out (T)", "Difference (T)", "How it was calculated",
+    ]
+    assert ws["A1"].fill.fgColor.rgb == "FF4F2170" and ws["A1"].font.bold          # same header style as the other tabs
+    assert [(ws.cell(row=r, column=1).value, ws.cell(row=r, column=3).value, ws.cell(row=r, column=4).value)
+            for r in (2, 3, 4)] == [("P1", "LC5", "Jun-26"), ("P1", "LC5", "Jul-26"), ("P2", "LC9", "Jul-26")]
+    assert ws.freeze_panes == "E2" and ws.auto_filter.ref == "A1:N4"               # header + 4 id columns frozen; data only
+    assert ws["I2"].number_format == "0.0%"
+    assert "Difference = (produced + carry-out) - (FIN + carry-in)" in ws["A6"].value   # footnote sits outside the filter
+    assert ws["M2"].value == 0.0 and ws["K2"].value == 30.0
+
+
+def test_trace_sheet_gives_long_sentences_taller_rows():
+    long_text = _traced(carryover_fin_in=335.1, wk1a=51.8, carry_spread=283.2, changeover_first=True,
+                        moq_case="B", current_fin=883.0, moq_qty=116.5, run1_target=441.5, run1_placed=248.7,
+                        run2_deferred=351.1, carryover_next=634.4)
+    ws = _trace_ws([long_text, _traced(link_code="L2")])
+    heights = sorted(ws.row_dimensions[r].height for r in (2, 3))
+    assert heights[0] == 15 and heights[1] >= 30
+
+
+def test_trace_sheet_is_written_for_real_runs_after_the_run_report():
+    tmp, wb = _write_with_report(_report())
+    with tmp:
+        assert wb.sheetnames[-2:] == ["Run Report", "Calculation Trace"]
+        ws = wb["Calculation Trace"]
+        assert ws.max_row >= 2 and ws["C2"].value == "L1"
+
+
+def test_a_broken_trace_sheet_never_costs_the_plan_or_the_run_report(monkeypatch):
+    def boom(workbook, rows):
+        workbook.create_sheet(calculation_trace_sheet.SHEET_NAME)   # half-built, then failure
+        raise RuntimeError("renderer bug")
+
+    monkeypatch.setattr(calculation_trace_sheet, "write", boom)
+    tmp, wb = _write_with_report(_report())
+    with tmp:
+        assert wb.sheetnames == ["Weekly Plan", "Comparison Table", "Weekly DIFC Summary", "Assumption Applied",
+                                 "Run Report"]
