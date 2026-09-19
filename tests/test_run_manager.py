@@ -157,3 +157,158 @@ def test_fails_cleanly_when_mps_output_missing():
         assert result.status.value == "failed"
         assert result.output_path is None
         assert result.errors
+
+
+# --- Logging, failure handling and health checks (PR: run logging) ----------
+
+import logging
+
+import pytest
+
+
+@pytest.fixture
+def run_log():
+    """Collect everything the run logger emits, independent of how (or whether)
+    the host process configured logging."""
+    records: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            records.append(f"{record.levelname} {record.getMessage()}")
+
+    handler = _Capture()
+    logger = logging.getLogger("wds.run")
+    previous_level = logger.level
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(handler)
+    yield records
+    logger.removeHandler(handler)
+    logger.setLevel(previous_level)
+
+
+def _inputs(tmp):
+    mps_input_path = os.path.join(tmp, "mps_input.xlsx")
+    mps_output_path = os.path.join(tmp, "mps_output.xlsx")
+    _build_mps_input(mps_input_path)
+    _build_mps_output(mps_output_path)
+    return mps_input_path, mps_output_path
+
+
+def test_a_successful_run_logs_its_stages_inputs_and_outcome(run_log):
+    with tempfile.TemporaryDirectory() as tmp:
+        mps_input_path, mps_output_path = _inputs(tmp)
+        result = execute_run(mps_input_path, mps_output_path, None,
+                             RunParams(start_period=1, end_period=1), output_dir=tmp)
+
+    joined = "\n".join(run_log)
+    assert result.trace_id and result.status.value == "degraded"
+    assert "RUN_START periods=1-1 lines=all" in joined
+    assert "INPUT mps_input sha256=" in joined and "INPUT manual_input not-supplied" in joined
+    for stage in ("parse", "validate", "consolidation", "dos_difc", "excel_write"):
+        assert f"STAGE {stage} END" in joined
+    assert "FALLBACK" in joined                       # manual input absent -> run-level fallbacks logged
+    assert "HEALTH conservation ok" in joined
+    assert "RUN_END status=degraded" in joined
+    assert "RUN_FAILED" not in joined and "INTEGRITY_FAILED" not in joined
+
+
+def test_a_crash_in_any_stage_is_a_clean_failed_result_naming_stage_and_period(monkeypatch, run_log):
+    from orchestration import run_manager
+
+    def boom(*args, **kwargs):
+        raise KeyError("throughput_per_day")
+
+    monkeypatch.setattr(run_manager.allocation, "run", boom)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        mps_input_path, mps_output_path = _inputs(tmp)
+        result = execute_run(mps_input_path, mps_output_path, None,
+                             RunParams(start_period=1, end_period=1), output_dir=tmp)  # must not raise
+
+    assert result.status.value == "failed" and result.output_path is None
+    assert "'allocation' failed (period 1)" in result.errors[0]
+    assert "throughput_per_day" in result.errors[0]
+    assert f"[ref {result.trace_id}]" in result.errors[0]
+
+    joined = "\n".join(run_log)
+    assert "STAGE allocation FAILED period=1 KeyError" in joined
+    assert "RUN_FAILED stage=allocation period=1" in joined
+    assert "RUN_END status=failed" in joined
+
+
+def test_a_crash_outside_the_wrapped_stages_is_still_not_an_unrecorded_crash(monkeypatch, run_log):
+    from orchestration import run_manager
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("something odd")
+
+    monkeypatch.setattr(run_manager, "_run_pipeline", boom)
+    result = execute_run("a", "b", None, RunParams(start_period=1, end_period=1))
+    assert result.status.value == "failed"
+    assert "Unexpected error: something odd" in result.errors[0] and "[ref " in result.errors[0]
+    assert any("RUN_FAILED stage=unexpected" in line for line in run_log)
+
+
+def test_parse_failure_keeps_its_existing_message_text(run_log):
+    with tempfile.TemporaryDirectory() as tmp:
+        garbage = os.path.join(tmp, "not_a_workbook.xlsx")
+        with open(garbage, "wb") as f:
+            f.write(b"this is not an excel file")
+        result = execute_run(garbage, garbage, None, RunParams(start_period=1, end_period=1), output_dir=tmp)
+    assert result.status.value == "failed" and result.output_path is None
+    assert result.errors and "[ref" not in result.errors[0]      # unchanged text: no reference suffix added
+    assert any("RUN_FAILED stage=parse" in line for line in run_log)
+    assert any("RUN_END status=failed" in line for line in run_log)
+
+
+def test_validation_failure_keeps_its_existing_messages_and_is_logged(run_log):
+    with tempfile.TemporaryDirectory() as tmp:
+        mps_input_path = os.path.join(tmp, "mps_input.xlsx")
+        _build_mps_input(mps_input_path)
+        # Same workbook as both inputs: it parses fine, but MPS Output's required sheets are absent.
+        result = execute_run(mps_input_path, mps_input_path, None,
+                             RunParams(start_period=1, end_period=1), output_dir=tmp)
+    assert result.status.value == "failed"
+    assert "MPS Output is missing required sheet(s)" in result.errors[0]
+    assert "[ref" not in result.errors[0]
+    assert any("RUN_FAILED stage=validate" in line for line in run_log)
+
+
+def test_a_failed_health_check_warns_loudly_but_still_produces_the_output(monkeypatch, run_log):
+    from engine.health_checks import HealthCheck, HealthReport
+    from orchestration import run_manager
+
+    failing = HealthReport(checks=[HealthCheck(
+        "conservation", False, "rows=1 max_dev=50.000T tol=0.5T violations=1",
+        ["P_L1/L1/P1: produced+carryover_out differs from FIN+carryover_in by -50.00 T"],
+    )])
+    monkeypatch.setattr(run_manager.health_checks, "check", lambda rows: failing)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        mps_input_path, mps_output_path = _inputs(tmp)
+        result = execute_run(mps_input_path, mps_output_path, None,
+                             RunParams(start_period=1, end_period=1), output_dir=tmp)
+        assert result.status.value == "degraded"                       # not failed, not blocked
+        assert result.output_path and os.path.exists(result.output_path)
+        assert result.integrity_warnings and result.integrity_warnings[0].startswith("conservation:")
+
+    joined = "\n".join(run_log)
+    assert "ERROR INTEGRITY_FAILED check=conservation" in joined
+    assert "INTEGRITY_FAILED_ROW P_L1/L1/P1" in joined
+
+
+def test_a_broken_health_check_never_fails_the_run(monkeypatch, run_log):
+    from orchestration import run_manager
+
+    def boom(rows):
+        raise RuntimeError("checker bug")
+
+    monkeypatch.setattr(run_manager.health_checks, "check", boom)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        mps_input_path, mps_output_path = _inputs(tmp)
+        result = execute_run(mps_input_path, mps_output_path, None,
+                             RunParams(start_period=1, end_period=1), output_dir=tmp)
+        assert result.status.value == "degraded" and os.path.exists(result.output_path)
+        assert result.integrity_warnings == []
+    assert any("HEALTH check could not run" in line for line in run_log)
