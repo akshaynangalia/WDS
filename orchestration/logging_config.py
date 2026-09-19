@@ -13,6 +13,8 @@ Design rules:
     - Output is plain ASCII. Anything else is escaped, so a Windows console
       (cp1252) or an odd character in a user's data can never make logging
       itself raise.
+    - Timestamps are UTC (marked with a trailing Z), the same clock as the run
+      id, so a run id and its log lines can be matched by eye on any server.
     - Every line carries run=<id>. The id lives in a context variable, so
       engine code never has to pass it around.
     - Observability must never break the product: nothing here raises.
@@ -32,13 +34,14 @@ import logging
 import os
 import subprocess
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 LOGGER_NAME = "wds"
 _FORMAT = "%(asctime)s | %(levelname)-7s | run=%(run_id)s | %(message)s"
-_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+_DATE_FORMAT = "%Y-%m-%d %H:%M:%SZ"  # UTC, same clock as the run id and the Run Report
 
 _run_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("wds_run_id", default="-")
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -59,6 +62,8 @@ _ASCII_MAP = str.maketrans({
 
 
 class _AsciiFormatter(logging.Formatter):
+    converter = time.gmtime  # timestamps in UTC, matching run ids (which are UTC) and the Run Report
+
     def format(self, record: logging.LogRecord) -> str:
         text = super().format(record).translate(_ASCII_MAP)
         return text.encode("ascii", "backslashreplace").decode("ascii")

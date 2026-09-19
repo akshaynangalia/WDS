@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from engine.dos_difc import DIFCResult
 from engine.fallback import FallbackDecisions
 from engine.reconciliation import ReconciledResult
+from engine.run_report import RunReport
 
 
 @dataclass
@@ -22,6 +23,7 @@ class EngineResult:
     difc: DIFCResult
     fallback: FallbackDecisions
     capacity_messages: list[str] = field(default_factory=list)
+    run_report: RunReport | None = None  # when None the workbook simply has no Run Report sheet
 
     @property
     def all_assumption_messages(self) -> list[str]:
