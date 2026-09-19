@@ -135,3 +135,35 @@ def test_reconciliation_with_carryover_in_and_out_across_two_periods():
     reconciled_p2 = reconcile(result_p2)
     assert assert_conservation(reconciled_p2) == []
     assert reconciled_p2.rows[0].carryover_fin_in == 200.0
+
+
+def test_recon_adjustment_records_the_net_change_reconciliation_made():
+    """Calculation Trace fact: recon_adjustment is exactly what reconciliation
+    added to (or trimmed from) the weekly buckets, so the trace can account
+    for every tonne. Same fixture as the rounding-residual test above."""
+    from engine.allocation import AllocationResult, SkuAllocation
+
+    alloc = SkuAllocation(
+        plant_line="P_L", period=1, link_code="L1", priority=1.0,
+        current_fin=100.0, carryover_fin_in=0.0, throughput_per_day=24.0, ge_pct=1.0,
+    )
+    alloc.wk1 = 99.6  # 0.4 short of FIN -- reconciliation tops wk1 up to 100.0
+    result = AllocationResult(rows=[alloc], leftover_capacity={("P_L", 1): {
+        "wk1a": 0.0, "wk1": 50.0, "wk2": 0.0, "wk3": 0.0, "wk4": 0.0, "wk5": 0.0}})
+
+    reconciled = reconcile(result)
+    assert reconciled.rows[0].recon_adjustment == 0.4
+    assert reconciled.rows[0].total_all == 100.0
+
+
+def test_recon_adjustment_is_zero_when_reconciliation_changed_nothing():
+    hungry = make_row("Shared_Line1", link_code="HUNGRY", priority=1.0, current_fin=10000.0,
+                      moq_days=None, throughput_per_day=20.0, opening_dos=10, target_dos=10)
+    starved = make_row("Shared_Line1", link_code="STARVED", priority=2.0, current_fin=200.0,
+                       moq_days=None, throughput_per_day=20.0, opening_dos=10, target_dos=10)
+    result = allocation.run(make_consolidated([hungry, starved]), calendar_df=None, fallback=FallbackDecisions())
+    before = {a.link_code: a.total_all for a in result.rows}
+    reconciled = reconcile(result)
+    for a in reconciled.rows:
+        assert a.recon_adjustment == round(a.total_all - before[a.link_code], 1)
+    assert next(a for a in reconciled.rows if a.link_code == "STARVED").recon_adjustment == 0.0

@@ -333,3 +333,92 @@ def test_priority_override_serves_a_lower_priority_carryover_first(no_fallback):
     lo_over = next(a for a in overridden.rows if a.link_code == "LO")
     assert round(lo_over.total_current_month, 1) == 672.0  # LO overridden -> goes first instead
     assert round(hi_over.total_current_month, 1) == 0.0
+
+
+# --- Calculation Trace facts (write-only; see the note on SkuAllocation) ---------
+
+def _by_code(result, link_code):
+    return next(a for a in result.rows if a.link_code == link_code)
+
+
+def _trace_parts(a):
+    return a.wk1a + a.carry_spread + a.run1_placed + a.run2_placed + a.recon_adjustment
+
+
+def test_trace_records_each_cases_inputs_and_run1_target(no_fallback):
+    rows = [
+        make_row("PA_L1", link_code="A", current_fin=300.0, moq_days=10, opening_dos=20, target_dos=20),  # A
+        make_row("PB_L1", link_code="B", current_fin=500.0, moq_days=5, opening_dos=20, target_dos=20),   # B split
+        make_row("PC_L1", link_code="C", current_fin=500.0, moq_days=5, opening_dos=18, target_dos=20),   # C
+        make_row("PD_L1", link_code="D", current_fin=500.0, moq_days=5, opening_dos=10, target_dos=20),   # D
+        make_row("PN_L1", link_code="N", current_fin=200.0, moq_days=None),                                # No MOQ
+    ]
+    result = allocation.run(make_consolidated(rows), calendar_df=None, fallback=no_fallback)
+
+    a, b, c, d, n = (_by_code(result, k) for k in "ABCDN")
+    assert (a.moq_qty, a.run1_target, a.run1_placed) == (240.0, 300.0, 300.0)   # whole FIN in Run 1
+    assert (b.moq_qty, b.run1_target, b.run1_placed) == (120.0, 250.0, 250.0)   # half of FIN (CR-03)
+    assert (c.dos_gap_days, c.dos_gap_qty, c.run1_target) == (2.0, 48.0, 120.0)  # 2 d x 24 T/d < batch -> batch
+    assert (d.dos_gap_days, d.dos_gap_qty, d.run1_target) == (10.0, 240.0, 240.0)  # gap >= batch -> the gap
+    assert (n.moq_qty, n.run1_target, n.run1_placed) == (0.0, 0.0, 0.0)          # Run 1 skipped entirely
+    assert n.run2_placed == 200.0
+    assert all(x.daily_demand == 24.0 for x in (a, b, c, d, n))                   # make_row defaults it to throughput
+
+
+def test_trace_parts_add_up_exactly_to_what_was_produced(no_fallback):
+    rows = [
+        make_row("PA_L1", link_code="A", current_fin=300.0, moq_days=10, opening_dos=20, target_dos=20),
+        make_row("PD_L1", link_code="D", current_fin=500.0, moq_days=5, opening_dos=10, target_dos=20),
+        make_row("PN_L1", link_code="N", current_fin=2000.0, moq_days=None),   # capacity-bound: carries over
+        make_row("PS_L1", link_code="S", current_fin=400.0, moq_days=3, opening_dos=20, target_dos=20),
+    ]
+    result = allocation.run(make_consolidated(rows), calendar_df=None, fallback=no_fallback,
+                            carryover_fin_in={("PS_L1", "S"): 50.0, ("PA_L1", "A"): 30.0})
+    reconciled = reconcile(result)
+    for a in reconciled.rows:
+        assert abs(a.total_all - _trace_parts(a)) < 1e-6, (a.link_code, a.total_all, _trace_parts(a))
+
+
+def test_trace_records_when_run1_could_not_place_its_target(no_fallback):
+    # Case B split asks for half of 2000 = 1000 T, but the line holds only 4 x 168 = 672 T.
+    row = make_row("Tiny_L1", link_code="X", current_fin=2000.0, moq_days=5, opening_dos=20, target_dos=20)
+    a = _by_code(allocation.run(make_consolidated([row]), calendar_df=None, fallback=no_fallback), "X")
+    assert a.run1_target == 1000.0 and a.run1_placed == 672.0
+    assert a.run2_placed == 0.0 and a.run2_deferred == 1328.0
+    assert a.run2_moq_blocked is False               # the line was simply full, not the MOQ floor
+
+
+def test_trace_tells_an_moq_floor_deferral_from_a_full_line(no_fallback):
+    # Same two fixtures as the Run 2 deferral tests, read through the trace instead of the message.
+    tight = allocation.run(make_consolidated([
+        make_row("Tight_Line1", link_code="HUNGRY", priority=1.0, current_fin=500.0, moq_days=None),
+        make_row("Tight_Line1", link_code="STARVED", priority=2.0, current_fin=200.0, moq_days=5,
+                 opening_dos=20, target_dos=20),
+    ]), calendar_df=None, fallback=no_fallback)
+    starved = _by_code(tight, "STARVED")
+    assert starved.run2_deferred > 0 and starved.run2_moq_blocked is True   # a sliver existed, below one MOQ run
+
+    full = allocation.run(make_consolidated([
+        make_row("Full_Line1", link_code="HUNGRY", priority=1.0, current_fin=672.0, moq_days=None),
+        make_row("Full_Line1", link_code="STARVED", priority=2.0, current_fin=250.0, moq_days=5,
+                 opening_dos=20, target_dos=20),
+    ]), calendar_df=None, fallback=no_fallback)
+    starved = _by_code(full, "STARVED")
+    assert starved.run2_deferred > 0 and starved.run2_moq_blocked is False  # every week already at zero
+
+
+def test_trace_flags_only_carry_in_rows_served_first_by_the_changeover_override(no_fallback):
+    hi = make_row("P_L1", link_code="HI", priority=1.0, current_fin=1.0, moq_days=None)
+    lo = make_row("P_L1", link_code="LO", priority=5.0, current_fin=1.0, moq_days=None)
+    idle = make_row("P_L1", link_code="IDLE", priority=9.0, current_fin=1.0, moq_days=None)   # no carry-in
+    table = make_consolidated([hi, lo, idle])
+    carry_in = {("P_L1", "HI"): 1000.0, ("P_L1", "LO"): 1000.0}
+
+    plain = allocation.run(table, calendar_df=None, fallback=no_fallback, carryover_fin_in=carry_in)
+    assert not any(a.changeover_first for a in plain.rows)
+
+    flagged = allocation.run(table, calendar_df=None, fallback=no_fallback, carryover_fin_in=carry_in,
+                             priority_override={("P_L1", "LO"), ("P_L1", "IDLE")})
+    assert _by_code(flagged, "LO").changeover_first is True
+    assert _by_code(flagged, "HI").changeover_first is False       # not in the override set
+    assert _by_code(flagged, "IDLE").changeover_first is False     # in the set, but has no carry-in to serve

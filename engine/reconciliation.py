@@ -52,6 +52,7 @@ def reconcile(alloc_result: AllocationResult) -> ReconciledResult:
     # top-up for one Link Code reduces what is still available to the next Link Code sharing
     # that line-week -- mirroring how allocation shares weekly capacity.
     leftover = {key: dict(caps) for key, caps in alloc_result.leftover_capacity.items()}
+    _pre_recon = {id(a): a.total_all for a in alloc_result.rows}  # Calculation Trace only (write-only)
 
     for alloc in alloc_result.rows:
         total_pool = alloc.current_fin + alloc.carryover_fin_in
@@ -115,6 +116,8 @@ def reconcile(alloc_result: AllocationResult) -> ReconciledResult:
         else:
             alloc.gap_vs_fin = 0.0
 
+    for a in alloc_result.rows:
+        a.recon_adjustment = round(a.total_all - _pre_recon[id(a)], 1)  # Calculation Trace only
     return ReconciledResult(rows=alloc_result.rows)
 
 

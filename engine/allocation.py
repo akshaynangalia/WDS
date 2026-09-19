@@ -90,6 +90,23 @@ class SkuAllocation:
     opening_dos: float = 0.0
     target_dos: float = 0.0
     moq_days: object = None  # raw Priority(Linkcode Level) MOQ (days), None if not supplied -- Weekly Plan's "MOQ" column
+    # --- Calculation Trace facts (output/calculation_trace_sheet.py). WRITE-ONLY: nothing
+    # in the engine ever reads these back, so they cannot influence a calculation.
+    # The "placed" figures are differences of the stored running total, so the parts
+    # always add up exactly:
+    #     total_all == wk1a + carry_spread + run1_placed + run2_placed + recon_adjustment
+    daily_demand: float = 0.0       # T/day, as used for the DOS-gap tonnage
+    dos_gap_days: float = 0.0
+    moq_qty: float = 0.0            # one MOQ batch in tonnes (0 if no MOQ)
+    dos_gap_qty: float = 0.0        # DOS gap in tonnes (gap days x daily demand)
+    run1_target: float = 0.0        # what the Case logic asked Run 1 to produce
+    carry_spread: float = 0.0       # carry-in placed in W1-W4 (beyond what fit in W1A)
+    run1_placed: float = 0.0        # what Run 1 actually managed to place
+    run2_placed: float = 0.0
+    run2_deferred: float = 0.0      # FIN Run 2 could not place
+    run2_moq_blocked: bool = False  # ...because a fresh run would have been below the MOQ floor
+    recon_adjustment: float = 0.0   # net change reconciliation made to the weekly buckets
+    changeover_first: bool = False  # served first in the carry-in pass (REQ-CR-05)
 
     @property
     def total_current_month(self) -> float:
@@ -164,6 +181,8 @@ def run(
                 plant=plant, line=line, brand=r.get("brand"), link_desc=r.get("link_desc"),
                 month_key=month_key, opening_dos=r["opening_dos"], target_dos=r["target_dos"],
                 moq_days=r["moq_days"],
+                daily_demand=0.0 if r["daily_demand"] is None or pd.isna(r["daily_demand"]) else r["daily_demand"],
+                dos_gap_days=r["dos_gap"],
             )
 
         # --- Carryover (W1A) pass: happens before Run 1, per ground-truth doc ---
@@ -180,6 +199,7 @@ def run(
             alloc = allocations[r["link_code"]]
             if alloc.carryover_fin_in <= 0:
                 continue
+            alloc.changeover_first = (plant_line, r["link_code"]) in priority_override
             hrs_needed = _hours_needed(alloc.carryover_fin_in, r["throughput_per_day"], r["ge_pct"])
             hrs_used = min(hrs_needed, rem_wk1a) if rem_wk1a > 0 else 0.0
             produced = _qty_from_hours(hrs_used, r["throughput_per_day"], r["ge_pct"]) if hrs_used else 0.0
@@ -199,6 +219,8 @@ def run(
                     setattr(alloc, wk, round(getattr(alloc, wk) + produced_wk, 1))
                     rem[wk] = round(rem[wk] - hrs_used_wk, 1)
 
+        for _a in allocations.values():  # only the carry-in pass has placed anything so far
+            _a.carry_spread = round(_a.total_current_month, 1)
         # Any W1A capacity no Link Code's carryover consumed is freed for the
         # current month's regular production (ground-truth doc: "If
         # carryover_fin <= W1A capacity: produce full carryover in W1A;
@@ -261,7 +283,11 @@ def run(
 
             run1_qty[link_code] = min(qty, fin)
             allocations[link_code].moq_case = case
+            allocations[link_code].run1_target = run1_qty[link_code]
+            allocations[link_code].moq_qty = moq_qty_equiv
+            allocations[link_code].dos_gap_qty = dos_gap_qty
 
+        _pre_run1 = {lc: a.total_current_month for lc, a in allocations.items()}
         for r in link_code_rows:
             link_code = r["link_code"]
             alloc = allocations[link_code]
@@ -277,7 +303,11 @@ def run(
                 rem[wk] = round(rem[wk] - hrs_used, 1)
                 produced_total += produced
 
+        for lc, _a in allocations.items():
+            _a.run1_placed = round(_a.total_current_month - _pre_run1[lc], 1)
+
         # --- Run 2: distribute whatever FIN remains ---
+        _pre_run2 = {lc: a.total_current_month for lc, a in allocations.items()}
         for r in link_code_rows:
             link_code = r["link_code"]
             alloc = allocations[link_code]
@@ -314,6 +344,8 @@ def run(
                 produced_total += produced
 
             deferred = round(remaining_fin - produced_total, 1)
+            alloc.run2_deferred = deferred
+            alloc.run2_moq_blocked = moq_blocked
             if deferred > 0.01 and moq_qty > 0:
                 if moq_blocked:
                     # At least one week had real leftover capacity, but not enough
@@ -333,6 +365,9 @@ def run(
                         f"weekly capacity remained on this line for this period -- "
                         f"deferred to reconciliation."
                     )
+
+        for lc, _a in allocations.items():
+            _a.run2_placed = round(_a.total_current_month - _pre_run2[lc], 1)
 
         leftover_capacity[(plant_line, period)] = {
             "wk1a": rem_wk1a, "wk1": rem["wk1"], "wk2": rem["wk2"],

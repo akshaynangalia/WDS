@@ -334,7 +334,7 @@ def test_a_real_run_ends_with_a_run_report_that_matches_its_log_reference():
         wb = openpyxl.load_workbook(result.output_path)
 
     assert wb.sheetnames == ["Weekly Plan", "Comparison Table", "Weekly DIFC Summary",
-                             "Assumption Applied", "Run Report"]
+                             "Assumption Applied", "Run Report", "Calculation Trace"]
     ws = wb["Run Report"]
     rows = {ws.cell(row=r, column=1).value: ws.cell(row=r, column=2).value for r in range(1, ws.max_row + 1)}
     assert rows["Reference"] == result.trace_id                  # same id as run=<id> in the log
@@ -354,3 +354,24 @@ def test_a_failed_run_produces_no_workbook_and_so_no_run_report(monkeypatch):
         result = execute_run(mps_input_path, mps_output_path, None,
                              RunParams(start_period=1, end_period=1), output_dir=tmp)
     assert result.status.value == "failed" and result.output_path is None
+
+
+def test_a_real_run_carries_a_calculation_trace_that_agrees_with_the_plan():
+    import re
+
+    with tempfile.TemporaryDirectory() as tmp:
+        mps_input_path, mps_output_path = _inputs(tmp)
+        result = execute_run(mps_input_path, mps_output_path, None,
+                             RunParams(start_period=1, end_period=1), output_dir=tmp)
+        wb = openpyxl.load_workbook(result.output_path)
+
+    ws = wb["Calculation Trace"]
+    headers = [c.value for c in ws[1]]
+    row = dict(zip(headers, [c.value for c in ws[2]]))
+    assert ws.max_row >= 2 and row["Linkcode"] == 111111 and row["Case"] == "No MOQ"   # no Manual Input -> no MOQ
+    assert row["Total FIN (T)"] == 300.0 and row["Produced (T)"] == 300.0 and row["Carry-out (T)"] == 0.0
+    assert abs(row["Difference (T)"]) < 0.05
+    text = row["How it was calculated"]
+    assert "No MOQ: all FIN goes through Run 2." in text and "Run 2 placed 300.0 T." in text
+    # The sentence and the columns come from the same figures: they cannot disagree.
+    assert re.search(r"Carry-out ([\d.]+) T\.", text).group(1) == f"{row['Carry-out (T)']:.1f}"
