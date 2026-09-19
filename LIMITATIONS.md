@@ -111,8 +111,9 @@ implemented for the one case it applies to:
   Run 2, no split.
 
 Measured on the full real dataset (10 periods, 942 rows): 258 rows (all Case B)
-move from a one-MOQ-batch Run 1 to a `FIN/2` Run 1. Aggregate volume unchanged,
-`gap_vs_fin` stays 0 — it is a **redistribution between Link Codes sharing a
+move from a one-MOQ-batch Run 1 to a `FIN/2` Run 1. Aggregate volume unchanged
+(each Link Code's weekly figures plus carry-out still equal its FIN plus
+carry-in) — it is a **redistribution between Link Codes sharing a
 line**: Run 1 is a full pass over every Link Code before Run 2 starts, so a
 bigger Run 1 claim locks in more of the shared, priority-ordered capacity
 during that pass.
@@ -196,3 +197,24 @@ on a line may qualify simultaneously; among themselves they keep their
 normal relative priority order. No new input file/column is required — the
 trigger is derived entirely from existing engine state (production
 placement and carryover).
+
+---
+
+## L6 — `gap_vs_fin` (Comparison Table) is measured after reconciliation, to the plan's own rounding
+
+`gap_vs_fin` is calculated for every Link Code and period once reconciliation
+has finished: `(FIN + carry-in) − (produced + carry-out)`. Positive means
+volume not accounted for; negative means over-produced.
+
+Every weekly figure is stored to 0.1 T, so each active week can sit up to
+0.05 T away from its exact value. A difference within that rounding —
+0.05 T × the row's number of active weeks, never less than 0.05 T — is the
+plan's own resolution, not a gap, and is shown as 0. Anything larger is shown
+as it is. On the full real dataset (10 periods, 942 rows) every row falls
+inside that allowance; the largest raw difference is 0.22 T (over-produced, on
+a five-week row). The raw, unrounded difference is on the Calculation Trace
+sheet ("Difference (T)").
+
+Reconciliation itself is unchanged: an over-production of a few tenths of a
+tonne, spread across several active weeks, can round away instead of being
+trimmed. `gap_vs_fin` reports that; it does not alter the plan.
