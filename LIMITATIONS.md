@@ -178,3 +178,21 @@ depend on it.
 
 **Open question for the client.** Does `List Code` in `SKU Master` represent
 the SKU, or is a dedicated `SKU` column needed?
+
+---
+
+## L5 — REQ-CR-05 (month-end changeover / split-week handling)
+
+A Link Code producing in a line's real final calendar week (W4, or W5 in a
+five-week month) that still has `carryover_next > 0` is served first for
+that leftover volume in the following period — ahead of every other Link
+Code's carryover or fresh FIN on that line — avoiding an unnecessary
+changeover between months. Applies regardless of which Run 1 Case (A/B/C/D/
+No MOQ) produced the shortfall. The override is scoped strictly to that Link
+Code's carryover-servicing step (W1A and its W1–W4 residual spread) for the
+next period; its own fresh FIN that period is still processed at its normal
+assigned priority through Run 1/Run 2, unaffected. Any number of Link Codes
+on a line may qualify simultaneously; among themselves they keep their
+normal relative priority order. No new input file/column is required — the
+trigger is derived entirely from existing engine state (production
+placement and carryover).

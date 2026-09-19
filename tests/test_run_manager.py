@@ -74,6 +74,79 @@ def test_full_pipeline_headless_produces_valid_workbook():
         assert round(total_value, 1) == 300.0  # must equal FIN -- the whole point of reconciliation
 
 
+def test_cr05_changeover_override_beats_next_periods_better_priority():
+    # End-to-end proof of REQ-CR-05's wiring through run_manager.py, not just
+    # allocation.py's own unit test of the tie-break rule. Two Link Codes
+    # share one line:
+    #   FAST (111111)    Period 1 priority 1 -- consumes the entire line's
+    #                     capacity, still touches W4, ends with carryover.
+    #   STARVED (222222) Period 1 priority 2 -- gets zero capacity, never
+    #                     touches W4 -- does NOT qualify for the override.
+    # In Period 2 the listing is reversed so STARVED has the BETTER priority
+    # (1) and FAST the worse one (2) -- with no CR-05, STARVED (better
+    # priority) would be served first and FAST would stay short. The
+    # override should flip that: FAST (flagged from Period 1) goes first
+    # despite its worse Period-2 priority.
+    with tempfile.TemporaryDirectory() as tmp:
+        mps_input_path = os.path.join(tmp, "mps_input.xlsx")
+        mps_output_path = os.path.join(tmp, "mps_output.xlsx")
+
+        with pd.ExcelWriter(mps_input_path, engine="openpyxl") as writer:
+            pd.DataFrame({
+                "Link Code": [111111, 222222], "SKU": [111111, 222222], "Brand": ["B", "B"],
+                "Link Desc Description": ["Fast Product", "Starved Product"],
+            }).to_excel(writer, sheet_name="SKU Master", index=False)
+            pd.DataFrame({"Link Code": [111111, 222222], 1: [900.0, 500.0], 2: [900.0, 500.0]}).to_excel(
+                writer, sheet_name="2.Demand Input", index=False)
+            pd.DataFrame({"Key": [pd.Timestamp("2026-07-01"), pd.Timestamp("2026-08-01")],
+                          "Period": [1, 2]}).to_excel(writer, sheet_name="Period Calendar Matrix", index=False)
+            pd.DataFrame({
+                "Link Code": [111111, 222222, 111111, 222222], "Period": [1, 1, 2, 2],
+                "Plant": ["TestPlant"] * 4, "Line": ["Line1"] * 4, "GE%": [1.0] * 4, "SOC": [24.0] * 4,
+            }).to_excel(writer, sheet_name="4.SOC Sheet & Flag", index=False)
+
+        with pd.ExcelWriter(mps_output_path, engine="openpyxl") as writer:
+            pd.DataFrame({
+                # Row order sets file-order priority per (line, period) -- Period 1:
+                # FAST first (priority 1); Period 2: STARVED first (priority 1).
+                "Period": [1, 1, 2, 2], "Brand": ["B"] * 4,
+                "Link Code": [111111, 222222, 222222, 111111],
+                "Link Desc Description": ["Fast Product", "Starved Product", "Starved Product", "Fast Product"],
+                "O/S": [10] * 4, "DOS": [20] * 4,
+                "TestPlant_Line1": [900.0, 500.0, 1.0, 1.0],
+            }).to_excel(writer, sheet_name="Link Code Line Loading 1", index=False)
+            pd.DataFrame({
+                "Link Code": [111111, 222222], "Brand": ["B", "B"],
+                "Link Desc Description": ["Fast Product", "Starved Product"],
+                1: [20.0, 20.0], 2: [20.0, 20.0],
+                "Min": [20.0, 20.0], "Max": [20.0, 20.0], "Avg": [20.0, 20.0],
+                "Avg_min_dos_target": [20.0, 20.0],
+            }).to_excel(writer, sheet_name="Linkcode_DIFC", index=False)
+
+        params = RunParams(start_period=1, end_period=2)
+        result = execute_run(mps_input_path, mps_output_path, None, params, output_dir=tmp)
+        assert result.status.value == "degraded"
+
+        wp = pd.read_excel(result.output_path, sheet_name="Weekly Plan", header=[0, 1])
+        wp = wp.set_index(("Linkcode", "Unnamed: 2_level_1"))
+
+        # Period 1: confirms the trigger fired the way the fixture intends.
+        assert wp.loc[111111.0, ("Jul-26", "W4")] == 168.0        # FAST touched the real last week
+        assert wp.loc[111111.0, ("Jul-26", "Carryover M+1")] == 228.0
+        assert wp.loc[222222.0, ("Jul-26", "W4")] == 0.0          # STARVED never got a turn
+        assert wp.loc[222222.0, ("Jul-26", "Carryover M+1")] == 500.0
+
+        # Period 2: FAST (worse priority=2 this period) gets its carryover
+        # essentially fully served; STARVED (better priority=1) is squeezed --
+        # the opposite of what plain priority alone would have produced.
+        assert wp.loc[111111.0, ("Aug-26", "Priority")] == 2.0
+        assert wp.loc[222222.0, ("Aug-26", "Priority")] == 1.0
+        assert wp.loc[111111.0, ("Aug-26", "Total Produced")] == 228.0
+        assert wp.loc[111111.0, ("Aug-26", "Carryover M+1")] <= 1.0   # rounding dust only
+        assert wp.loc[222222.0, ("Aug-26", "Total Produced")] == 444.0
+        assert wp.loc[222222.0, ("Aug-26", "Carryover M+1")] == 57.0  # left short despite better priority
+
+
 def test_fails_cleanly_when_mps_output_missing():
     with tempfile.TemporaryDirectory() as tmp:
         mps_input_path = os.path.join(tmp, "mps_input.xlsx")

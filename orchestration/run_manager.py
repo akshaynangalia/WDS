@@ -6,7 +6,9 @@ Document, Section 2.3.
 Periods are processed in ascending order so that each period's Carryover
 M+1 (engine/carryover.py) feeds directly into the next period's carryover-in,
 closing the loop across the planning horizon exactly as the ground-truth doc
-describes.
+describes. REQ-CR-05's priority overrides (engine/changeover.py) are threaded
+forward the same way -- computed from one period's finished allocation, fed
+into the next period's allocation.run() call.
 
 Contract:
     consumes: file paths/objects for the three inputs (manual_input may be
@@ -55,15 +57,17 @@ def execute_run(
     all_reconciled_rows = []
     capacity_messages: list[str] = []
     carry_in = dict(params.opening_carryover or {})
+    priority_override: set[tuple[str, object]] = set()
 
     for period in sorted(df["period"].unique()):
         period_table = consolidation.ConsolidatedTable(data=df[df["period"] == period])
-        alloc_result = allocation.run(period_table, manual_input.calendar, decisions, carry_in)
+        alloc_result = allocation.run(period_table, manual_input.calendar, decisions, carry_in,
+                                       priority_override=priority_override)
         capacity_messages.extend(alloc_result.capacity_messages)
         reconciled = reconcile(alloc_result)
-        reconciled = changeover.apply(reconciled)  # no-op, per REQ-CR-05 seam
         all_reconciled_rows.extend(reconciled.rows)
         carry_in = carryover.extract_carryover(reconciled)
+        priority_override = changeover.compute_priority_overrides(reconciled)
 
     combined_reconciled = ReconciledResult(rows=all_reconciled_rows)
     difc_result = dos_difc.compute(all_reconciled_rows, df, mps_input.demand, decisions)
