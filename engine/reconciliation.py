@@ -40,6 +40,7 @@ from engine.allocation import (
 
 ALL_BUCKETS = ("wk1a", "wk1", "wk2", "wk3", "wk4", "wk5")
 GAP_TOLERANCE = 0.05
+ROUNDING_HALF_STEP_T = 0.05  # half of the 0.1 T resolution every weekly figure is stored at
 
 
 @dataclass
@@ -60,7 +61,6 @@ def reconcile(alloc_result: AllocationResult) -> ReconciledResult:
         gap = round(total_pool - produced, 2)
 
         if abs(gap) <= GAP_TOLERANCE:
-            alloc.gap_vs_fin = 0.0
             continue
 
         active_buckets = [b for b in ALL_BUCKETS if getattr(alloc, b) > 0]
@@ -73,7 +73,6 @@ def reconcile(alloc_result: AllocationResult) -> ReconciledResult:
                 per_bucket = gap / len(active_buckets)
                 for b in active_buckets:
                     setattr(alloc, b, round(getattr(alloc, b) + per_bucket, 1))
-            alloc.gap_vs_fin = 0.0
             continue
 
         # gap > 0 -- a genuine shortfall. Top up active buckets, but never past
@@ -107,18 +106,34 @@ def reconcile(alloc_result: AllocationResult) -> ReconciledResult:
         residual = round(total_pool - sum(getattr(alloc, b) for b in ALL_BUCKETS), 1)
         if residual > GAP_TOLERANCE:
             alloc.carryover_next = round(alloc.carryover_next + residual, 1)
-            alloc.gap_vs_fin = 0.0
         elif residual < -GAP_TOLERANCE and active_buckets:
             # Rounding overshoot -- trim it off the largest active bucket.
             b = max(active_buckets, key=lambda x: getattr(alloc, x))
             setattr(alloc, b, round(getattr(alloc, b) + residual, 1))
-            alloc.gap_vs_fin = 0.0
-        else:
-            alloc.gap_vs_fin = 0.0
 
     for a in alloc_result.rows:
         a.recon_adjustment = round(a.total_all - _pre_recon[id(a)], 1)  # Calculation Trace only
+        a.gap_vs_fin = measured_gap(a)  # COMPARISON_TABLE field; written last, read by nothing in the engine
     return ReconciledResult(rows=alloc_result.rows)
+
+
+def measured_gap(a: SkuAllocation) -> float:
+    """gap_vs_fin as it stands AFTER reconciliation, from the row's own figures:
+
+        (FIN + carry-in) - (produced + carry-out)     positive = not accounted for,
+                                                      negative = over-produced
+
+    Every weekly figure is stored to 0.1 T, so each active week can sit up to
+    0.05 T away from the exact value. A leftover within that rounding
+    (0.05 T x the row's active weeks, never less than 0.05 T) is the plan's own
+    resolution, not a gap, and is reported as 0. Anything larger is reported as
+    it is. (Real data: every row's leftover was inside this bound; the raw
+    figure stays visible as "Difference (T)" on the Calculation Trace.)"""
+    gap = round((a.current_fin + a.carryover_fin_in) - (a.total_all + a.carryover_next), 2)
+    active_weeks = sum(1 for b in ALL_BUCKETS if getattr(a, b) > 0)
+    if abs(gap) <= ROUNDING_HALF_STEP_T * max(active_weeks, 1) + 1e-9:
+        return 0.0
+    return gap
 
 
 def assert_conservation(reconciled: ReconciledResult) -> list[str]:

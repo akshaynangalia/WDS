@@ -167,3 +167,93 @@ def test_recon_adjustment_is_zero_when_reconciliation_changed_nothing():
     for a in reconciled.rows:
         assert a.recon_adjustment == round(a.total_all - before[a.link_code], 1)
     assert next(a for a in reconciled.rows if a.link_code == "STARVED").recon_adjustment == 0.0
+
+
+# --- gap_vs_fin is measured after reconciliation, not assigned -----------------
+
+def _stored(**buckets):
+    """A reconciled-looking row: FIN 100, no carry-in/out, weekly buckets as given."""
+    from engine.allocation import SkuAllocation
+
+    alloc = SkuAllocation(plant_line="P_L", period=1, link_code="L1", priority=1.0,
+                          current_fin=100.0, carryover_fin_in=0.0, throughput_per_day=24.0, ge_pct=1.0)
+    for name, qty in buckets.items():
+        setattr(alloc, name, qty)
+    return alloc
+
+
+def test_gap_vs_fin_reports_a_real_gap_and_is_not_a_constant():
+    from engine.reconciliation import measured_gap
+
+    assert measured_gap(_stored(wk1=100.0)) == 0.0                 # exact
+    assert measured_gap(_stored(wk1=100.6)) == -0.6                # over-produced by 0.6 T: must show, not read 0
+    assert measured_gap(_stored(wk1=99.4)) == 0.6                  # 0.6 T not accounted for: must show
+    alloc = _stored(wk1=99.4)
+    alloc.carryover_next = 0.6                                     # ...unless it was carried out
+    assert measured_gap(alloc) == 0.0
+
+
+def test_gap_vs_fin_allows_only_the_plans_own_rounding_per_active_week():
+    """Each active week is stored to 0.1 T, so it may be up to 0.05 T off:
+    the allowance is 0.05 T x active weeks (never less than 0.05 T)."""
+    from engine.reconciliation import measured_gap
+
+    five_weeks = dict(wk1a=20.0, wk1=20.0, wk2=20.0, wk3=20.0, wk4=20.22)   # 5 active weeks -> allowance 0.25 T
+    assert measured_gap(_stored(**five_weeks)) == 0.0                       # 0.22 T over: inside the rounding
+    assert measured_gap(_stored(**{**five_weeks, "wk4": 20.32})) == -0.32   # 0.32 T over: a real gap, shown
+    assert measured_gap(_stored(wk1=60.0, wk2=40.1)) == 0.0                 # 2 weeks: 0.1 T is the boundary, still 0
+    assert measured_gap(_stored(wk1=60.0, wk2=40.2)) == -0.2                # 2 weeks: 0.2 T is not
+
+
+def test_gap_vs_fin_with_no_production_and_nothing_carried_shows_the_full_gap():
+    from engine.reconciliation import measured_gap
+
+    assert measured_gap(_stored()) == 100.0                                 # nothing produced, nothing carried: all 100 T missing
+    alloc = _stored()
+    alloc.carryover_next = 100.0
+    assert measured_gap(alloc) == 0.0                                       # rolled forward: fully accounted for
+
+
+def test_reconcile_leaves_the_plan_untouched_and_gap_vs_fin_reads_zero_for_rounding_dust():
+    """Real-data row (DPC Baddi 324811, period 2): FIN 21.78 + carry-in 21.8 = 43.58 T pool,
+    produced 43.8 T over 5 weeks. reconcile() has never trimmed this (0.044 T a week rounds to
+    nothing) and must not start now -- the live plan is unchanged; only the measured gap is new.
+    The raw 0.22 T stays visible as 'Difference (T)' on the Calculation Trace."""
+    from engine.allocation import AllocationResult, SkuAllocation
+
+    alloc = SkuAllocation(
+        plant_line="P_L", period=1, link_code="L1", priority=1.0,
+        current_fin=21.78196661689216, carryover_fin_in=21.8, throughput_per_day=24.0, ge_pct=1.0,
+    )
+    alloc.wk1a, alloc.wk1, alloc.wk2, alloc.wk3, alloc.wk4 = 16.0, 23.3, 1.5, 1.5, 1.5
+    before = (alloc.wk1a, alloc.wk1, alloc.wk2, alloc.wk3, alloc.wk4, alloc.carryover_next)
+
+    reconciled = reconcile(AllocationResult(rows=[alloc], leftover_capacity={}))
+    row = reconciled.rows[0]
+    assert (row.wk1a, row.wk1, row.wk2, row.wk3, row.wk4, row.carryover_next) == before
+    assert row.gap_vs_fin == 0.0
+    assert round((row.total_all + row.carryover_next) - (row.current_fin + row.carryover_fin_in), 2) == 0.22
+
+
+def test_gap_vs_fin_is_zero_when_a_capacity_shortfall_rolls_to_carry_out():
+    row = make_row("Tight_Line1", period=1, current_fin=5000.0, moq_days=5,
+                   opening_dos=10, target_dos=10, throughput_per_day=20.0)
+    result = allocation.run(make_consolidated([row]), calendar_df=None, fallback=FallbackDecisions())
+    alloc = reconcile(result).rows[0]
+    assert alloc.carryover_next > 1000.0          # most of it could not be made...
+    assert alloc.gap_vs_fin == 0.0                # ...but every tonne is accounted for
+
+
+def test_gap_vs_fin_is_within_rounding_for_every_generated_combination():
+    """Same grid as the conservation test: after reconciliation no row may carry a
+    reportable gap."""
+    fin_values = [50, 150, 300, 750]
+    moq_days_values = [None, 2, 5, 12]
+    dos_gaps = [0, 3, 9, 15]
+    rows, i = [], 0
+    for fin, moq_days, gap, priority in itertools.product(fin_values, moq_days_values, dos_gaps, [1, 2, 3]):
+        i += 1
+        rows.append(make_row(f"GenPlant_Line{i % 3}", link_code=f"LC{i}", current_fin=float(fin), moq_days=moq_days,
+                             opening_dos=10.0, target_dos=10.0 + gap, priority=float(priority), throughput_per_day=20.0))
+    reconciled = reconcile(allocation.run(make_consolidated(rows), calendar_df=None, fallback=FallbackDecisions()))
+    assert [a.gap_vs_fin for a in reconciled.rows if a.gap_vs_fin != 0.0] == []
